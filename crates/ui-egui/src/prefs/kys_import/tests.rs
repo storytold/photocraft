@@ -239,3 +239,27 @@ fn a_windows_set_with_tool_keys_imports_as_photoshop_meant_it() {
     crate::prefs_ui::shortcuts::press_ok(&mut app, &ctx);
     assert_eq!(crate::tool_shortcuts::shortcut(&app, crate::state::Tool::Pencil).as_deref(), Some("N"));
 }
+
+/// With ⌘H Hides PhotoCraft on, a set giving Extras ⌘H keeps it as an override: ⌘H is Photoshop's default but not
+/// the one in effect (⌃⌘H), so saving it as "the default" would move Extras off the imported key. Saving the moved
+/// default unchanged keeps no override, so turning the setting off gives Extras ⌘H back.
+#[test]
+fn an_imported_cmd_h_on_extras_stays_when_cmd_h_hides_photocraft() {
+    use crate::prefs_ui::shortcuts::{profiles_of, save_keys};
+
+    let mut app = app();
+    app.session.edit_prefs(|p| p.interface.cmd_h_hides_app = true);
+    let unchanged = draft_keymap(&app);
+    let profiles = profiles_of(app.session.prefs());
+    save_keys(&mut app, &unchanged, &profiles).unwrap();
+    assert!(!app.session.prefs().shortcuts.contains_key("view.extras"), "{:?}", app.session.prefs().shortcuts);
+
+    let p = plan_of(&app, &set_of("<command name=\"Extras\"><shortcut>Cmd+H</shortcut></command>"));
+    assert_eq!(keys(&p, "view.extras"), ["Cmd+H"]);
+    let mut keymap = draft_keymap(&app);
+    p.apply(&mut keymap);
+    let profiles = profiles_of(app.session.prefs());
+    save_keys(&mut app, &keymap, &profiles).unwrap();
+    let default = crate::shortcuts::default_in_effect(&app, "view.extras", crate::shortcuts::default_shortcut("view.extras"));
+    assert_eq!(crate::shortcuts::effective_shortcut(&app, "view.extras", default.as_deref()).as_deref(), Some("Cmd+H"));
+}

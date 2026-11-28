@@ -27,10 +27,45 @@ pub const APP_NAME: &str = "PhotoCraft";
 pub(crate) fn laid_out(app: &mut PhotocraftApp, ctx: &egui::Context) -> Layout {
     let lang = crate::i18n::current();
     let label = |english: &'static str| crate::i18n::tr(lang, english).to_string();
-    // The system items give way to the command the keymap gives a key to, in a menu or not (tool keys, canvas keys).
-    let keys = |chord: &craft::keymap::Chord| holder(ctx, chord);
+    let keys = menu_keys(app, ctx);
     let options = LayoutOptions::new(APP_NAME).label(&label).keys(&keys);
     mac_layout(items::model(app, ctx).source(), &options)
+}
+
+/// What a layout's system items give way to: the command the keymap gives a key to, in a menu or not (tool keys,
+/// canvas keys). With ⌘H Hides PhotoCraft on, only a ⌘H the user gave a command keeps Hide off ⌘H: a workspace's
+/// scoped ⌘H (Content-Aware Fill's Hide Sampling Area) works only inside that workspace.
+pub(crate) fn menu_keys<'a>(app: &PhotocraftApp, ctx: &'a egui::Context) -> impl Fn(&craft::keymap::Chord) -> Option<craft::keymap::CommandRef> + 'a {
+    keys_under(cmd_hides_app(app).then(|| user_cmd_h(app.session.prefs())), move |chord| holder(ctx, chord))
+}
+
+/// [`menu_keys`] over the keymap's `holder`: while ⌘H Hides PhotoCraft is in effect, `user_cmd_h` is the command the
+/// user gave ⌘H, if any, and stands in for the keymap's holder of it.
+fn keys_under(
+    user_cmd_h: Option<Option<craft::keymap::CommandRef>>,
+    holder: impl Fn(&craft::keymap::Chord) -> Option<craft::keymap::CommandRef>,
+) -> impl Fn(&craft::keymap::Chord) -> Option<craft::keymap::CommandRef> {
+    let cmd_h = craft::keymap::Chord::parse("Cmd+H").ok();
+    move |chord| match &user_cmd_h {
+        Some(own) if Some(chord) == cmd_h.as_ref() => own.clone(),
+        _ => holder(chord),
+    }
+}
+
+/// Whether ⌘H Hides PhotoCraft is in effect: it moved View › Extras off ⌘H.
+fn cmd_hides_app(app: &PhotocraftApp) -> bool {
+    app.session.prefs().interface.default_shortcut("view.extras", Some("Cmd+H")) != Some("Cmd+H")
+}
+
+/// The command the user gave ⌘H, as a main or further key: with ⌘H Hides PhotoCraft on, no default of PhotoCraft's
+/// has ⌘H (View › Extras moved to ⌃⌘H), so only such a key keeps Hide off it. Read from the preferences rather than
+/// the runtime's keymap, which follows them a frame later.
+fn user_cmd_h(prefs: &photocraft_engine::prefs::Preferences) -> Option<craft::keymap::CommandRef> {
+    use photocraft_engine::prefs::normalize_shortcut;
+    let cmd_h = normalize_shortcut("Cmd+H");
+    let main = prefs.shortcuts.iter().find(|(_, key)| normalize_shortcut(key) == cmd_h).map(|(id, _)| id);
+    let further = || prefs.alternate_shortcuts.iter().find(|(_, keys)| keys.iter().any(|key| normalize_shortcut(key) == cmd_h)).map(|(id, _)| id);
+    main.or_else(further).map(|id| crate::shortcut_dispatch::keymap_command(id))
 }
 
 /// Installs the macOS menu bar; `None` where there is none (every other platform).

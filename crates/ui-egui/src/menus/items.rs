@@ -459,7 +459,7 @@ fn build(app: &PhotocraftApp) -> Built {
     let language = LanguageMenu::from_i18n(i18n, choice).submenu(&words.set::<LanguageLabels>()).platforms(Platforms::MAC);
     put_in_window(&mut bar, language);
     let label = |s: &'static str| crate::i18n::tr(lang, s).to_string();
-    let keys = |chord: &Chord| craft::ui::runtime::commands::holder(app.ctx(), chord);
+    let keys = crate::native_menu::menu_keys(app, app.ctx());
     let options = LayoutOptions::new(crate::native_menu::APP_NAME).label(&label).keys(&keys);
     translate_titles(&mut bar, lang);
     let laid = layout(&bar, target(app.ctx()), &options).bar;

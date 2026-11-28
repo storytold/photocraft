@@ -212,6 +212,9 @@ impl SavedPrefsExt for Session {
         // or by a 64-bit build; a hand-edited 0) loads as the nearest value it does. Otherwise
         // Apply from another Preferences tab, which validates every value, would reject it.
         prefs.performance.effect_cache_mb = accepted_effect_cache_mb(prefs.performance.effect_cache_mb, SMALL_ADDRESS_SPACE);
+        // ⌘H Hides PhotoCraft does nothing elsewhere and the dialog hides it there, but a file
+        // copied from a Mac would still move Extras to a key that reads Ctrl+Ctrl+H.
+        prefs.interface.cmd_h_hides_app &= cfg!(target_os = "macos");
         self.color_mut().settings = color_settings;
         // A number outside 0..MAX reads, but `validate_settings` would then refuse every later
         // Color Settings edit: reset it like an unreadable value.

@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use craft::keymap::{Binding, CommandDef, CommandKind, CommandRef, Keymap, Overrides, Platform, Scope, Scopes, reserved};
 
-use crate::prefs::{BindKind, Preferences, bindable_items, default_alternates, normalize_shortcut};
+use crate::prefs::{BindKind, Interface, Preferences, bindable_items, default_alternates, normalize_shortcut};
 use crate::shortcut_sets::ShortcutSet;
 
 /// A command's default keys in our notation: the main key, then the further keys (the main key is
@@ -99,7 +99,19 @@ pub fn keymap(prefs: &Preferences, platform: Platform) -> Keymap {
 /// The preferences' bindings as keymap overrides: per command the main key and the further keys in
 /// effect. Entries for ids outside the catalog (an action's function key) are kept as they are.
 pub fn prefs_overrides(prefs: &Preferences) -> Overrides {
-    overrides_of(&prefs.shortcuts, &prefs.alternate_shortcuts)
+    let mut out = overrides_of(&prefs.shortcuts, &prefs.alternate_shortcuts);
+    // A default the preferences move (⌘H Hides PhotoCraft puts View › Extras on ⌃⌘H, see
+    // `Interface::default_shortcut`) is an override of the catalog's default.
+    const EXTRAS: &str = "view.extras";
+    if !prefs.shortcuts.contains_key(EXTRAS) {
+        let default = defaults().get(EXTRAS).and_then(|d| d.main.clone());
+        let main = prefs.shortcut(EXTRAS, default.as_deref()).and_then(normalize_shortcut);
+        if main != default {
+            let further = prefs.alternates(EXTRAS, main.as_deref());
+            out.insert(EXTRAS.to_string(), main.into_iter().chain(further).collect());
+        }
+    }
+    out
 }
 
 /// A saved shortcut set as keymap overrides, as [`prefs_overrides`] reads the preferences.
@@ -146,6 +158,28 @@ pub fn overrides_to_prefs(overrides: &Overrides) -> (BTreeMap<String, String>, B
         let further = alternates_without(&main, keys.iter().skip(1).cloned());
         if further != alternates_without(&main, default.alternates.iter().cloned()) {
             alternates.insert(id.to_owned(), further);
+        }
+    }
+    (set, alternates)
+}
+
+/// [`overrides_to_prefs`] under `interface`, which can move a command's default
+/// ([`Interface::default_shortcut`]: ⌘H Hides PhotoCraft puts View › Extras on ⌃⌘H). The moved
+/// default is no override, and a main key that is the catalog's default but not the moved one is.
+pub fn overrides_to_prefs_under(interface: &Interface, overrides: &Overrides) -> (BTreeMap<String, String>, BTreeMap<String, Vec<String>>) {
+    let (mut set, alternates) = overrides_to_prefs(overrides);
+    const EXTRAS: &str = "view.extras";
+    let default = defaults().get(EXTRAS).and_then(|d| d.main.clone());
+    let moved = interface.default_shortcut(EXTRAS, default.as_deref()).and_then(normalize_shortcut);
+    if moved != default {
+        let main = match overrides.get(EXTRAS) {
+            Some(keys) => keys.first().and_then(|k| normalize_shortcut(k)),
+            None => default,
+        };
+        if main == moved {
+            set.remove(EXTRAS);
+        } else {
+            set.insert(EXTRAS.to_string(), main.unwrap_or_default());
         }
     }
     (set, alternates)

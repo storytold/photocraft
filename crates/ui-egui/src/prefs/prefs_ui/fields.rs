@@ -126,6 +126,9 @@ pub(super) fn rules(ctx: &egui::Context) -> Vec<SettingRule> {
             if prefs::LINUX_ONLY.contains(&path.as_str()) {
                 tweak(&mut rules, &path, |r| r.linux_only());
             }
+            if prefs::MAC_ONLY.contains(&path.as_str()) && !cfg!(target_os = "macos") {
+                tweak(&mut rules, &path, |r| r.hidden());
+            }
             if read_at_launch(&path) {
                 tweak(&mut rules, &path, |r| r.restart());
             }
@@ -156,6 +159,10 @@ pub(super) fn rules(ctx: &egui::Context) -> Vec<SettingRule> {
     // The browser presents frames itself: Low-Latency Drawing does nothing there.
     if cfg!(target_arch = "wasm32") {
         tweak(&mut rules, "performance.lowLatencyDrawing", |r| r.hidden());
+    }
+    // ⌘H Hides PhotoCraft is drawn with its note, which says where the other item's ⌘H went.
+    if cfg!(target_os = "macos") {
+        tweak(&mut rules, "interface.cmdHHidesApp", |r| r.custom_rows());
     }
     // WinTab is a Windows-only opt-in, drawn with its note; the row labels itself.
     if cfg!(target_os = "windows") {
@@ -235,6 +242,7 @@ fn label_override(key: &str) -> Option<&'static str> {
         "lowLatencyDrawing" => "Low-Latency Drawing (vsync off, applies at next launch)",
         "sizeLimitMb" => "Scratch Size Limit (MB, 0 = No Limit)",
         "gpuMemoryMb" => "GPU Memory (MB, 0 = Automatic)",
+        "cmdHHidesApp" => "⌘H Hides PhotoCraft",
         _ => return None,
     })
 }

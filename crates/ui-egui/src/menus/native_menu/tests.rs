@@ -257,6 +257,102 @@ fn the_menu_state_follows_the_preferences_the_rows_show() {
     assert_ne!(crate::menus::facts::key(&app), hidden, "the Quick Export label names the format");
 }
 
+/// ⌘H Hides PhotoCraft (opt-in): Hide takes ⌘H and View › Extras moves to ⌃⌘H, in the menu and in the keymap, with
+/// no input (a `prefs.set`); a key the user gives Extras still wins. Off, Extras keeps Photoshop's ⌘H. The keymap is
+/// the host's: the Mac's rule is checked on every host in `hide_takes_cmd_h_only_from_the_moved_extras`.
+#[test]
+#[cfg(target_os = "macos")]
+fn cmd_h_hides_photocraft_and_extras_moves() {
+    let (mut h, synced, _) = harness(true);
+    let shortcut = |synced: &Synced, id: CommandRef| synced.borrow().last().cloned().expect("menus synced").find(&id).and_then(|it| it.shortcut);
+    let extras = || crate::shortcut_dispatch::keymap_command("view.extras");
+    let hide = || craft::menu::Builtin::Hide.command();
+    let key = |s: &str| craft::menu::Chord::parse(s).unwrap();
+    assert_eq!(shortcut(&synced, extras()), Some(key("Cmd+H")), "off by default");
+    assert_eq!(shortcut(&synced, hide()), Some(key("Ctrl+Cmd+H")), "as in Photoshop");
+    assert_eq!(holder(&h.ctx, &key("Cmd+H")), Some(extras()), "the key runs Extras");
+
+    h.state_mut().session.edit_prefs(|p| p.interface.cmd_h_hides_app = true);
+    h.run_steps(3);
+    assert_eq!(shortcut(&synced, extras()), Some(key("Ctrl+Cmd+H")));
+    assert_eq!(shortcut(&synced, hide()), Some(key("Cmd+H")));
+    assert_eq!(holder(&h.ctx, &key("Ctrl+Cmd+H")), Some(extras()), "the key runs Extras");
+    // Content-Aware Fill's Hide Sampling Area keeps ⌘H inside its workspace; it doesn't keep Hide off ⌘H.
+    assert!(holder(&h.ctx, &key("Cmd+H")).is_none_or(|c| c.id.starts_with("fill.")), "no app-wide command has ⌘H");
+
+    h.state_mut().run("edit.keyboardShortcuts", json!({"set": {"view.extras": "Cmd+H"}, "allowUnknown": true})).unwrap();
+    h.run_steps(3);
+    assert_eq!(shortcut(&synced, hide()), Some(key("Ctrl+Cmd+H")));
+    assert_eq!(shortcut(&synced, extras()), Some(key("Cmd+H")));
+}
+
+/// Off macOS the preference does nothing, even set anyway: Extras keeps its key in the menu and in the keymap, where
+/// Ctrl is Cmd, so the Mac layout's Hide never takes it.
+#[test]
+#[cfg(not(target_os = "macos"))]
+fn cmd_h_hides_photocraft_does_nothing_off_macos() {
+    let (mut h, synced, _) = harness(true);
+    let shortcut = |synced: &Synced, id: CommandRef| synced.borrow().last().cloned().expect("menus synced").find(&id).and_then(|it| it.shortcut);
+    let extras = || crate::shortcut_dispatch::keymap_command("view.extras");
+    let hide = || craft::menu::Builtin::Hide.command();
+    let key = |s: &str| craft::menu::Chord::parse(s).unwrap();
+    for on in [false, true] {
+        h.state_mut().session.edit_prefs(|p| p.interface.cmd_h_hides_app = on);
+        h.run_steps(3);
+        assert_eq!(shortcut(&synced, extras()), Some(key("Cmd+H")), "pref {on}");
+        assert_eq!(holder(&h.ctx, &key("Cmd+H")), Some(extras()), "pref {on}: the key runs Extras");
+        assert_ne!(shortcut(&synced, hide()), Some(key("Cmd+H")), "pref {on}");
+    }
+}
+
+/// The Mac menu's rule, on any host: the layout over a keymap as a Mac has it, with and without the preference, and
+/// with keys of the user's.
+#[test]
+fn hide_takes_cmd_h_only_from_the_moved_extras() {
+    use craft::menu::{Builtin, Chord, Item, Menu};
+    let key = |s: &str| Chord::parse(s).unwrap();
+    let extras = || crate::shortcut_dispatch::keymap_command("view.extras");
+    // Hide's key in a bar whose Extras has `extras_key`, with `user_cmd_h` as `keys_under` takes it.
+    let hide = |extras_key: Option<&str>, user_cmd_h: Option<Option<CommandRef>>, held: &[(&str, CommandRef)]| {
+        let held: Vec<(Chord, CommandRef)> = held.iter().map(|(k, c)| (key(k), c.clone())).chain(extras_key.map(|k| (key(k), extras()))).collect();
+        let keys = keys_under(user_cmd_h, |chord| held.iter().find(|(k, _)| k == chord).map(|(_, c)| c.clone()));
+        let mut row = Item::new(extras(), "Extras");
+        row.shortcut = extras_key.map(key);
+        let bar = MenuBar::new(vec![Menu::new("View", vec![row.into()])]);
+        let bar = mac_layout(&bar, &LayoutOptions::new(APP_NAME).keys(&keys)).bar;
+        assert_eq!(bar.find(&extras()).and_then(|it| it.shortcut), extras_key.map(key), "the layout leaves Extras its key");
+        bar.find(&Builtin::Hide.command()).and_then(|it| it.shortcut)
+    };
+    let tint = || CommandRef::new("fill.hide_tint");
+    let fill = [("Cmd+H", tint())];
+    let no_own = Some(None);
+
+    // Off: Extras has ⌘H, as in Photoshop, and Hide moves to ⌃⌘H.
+    assert_eq!(hide(Some("Cmd+H"), None, &[]), Some(key("Ctrl+Cmd+H")));
+    // On: Extras moved to ⌃⌘H and Hide has ⌘H, also while a workspace's scoped command holds it.
+    assert_eq!(hide(Some("Ctrl+Cmd+H"), no_own.clone(), &[]), Some(key("Cmd+H")));
+    assert_eq!(hide(Some("Ctrl+Cmd+H"), no_own.clone(), &fill), Some(key("Cmd+H")));
+    // On, Extras unbound or on a key of the user's that isn't ⌘H: Hide has ⌘H.
+    assert_eq!(hide(None, no_own.clone(), &[]), Some(key("Cmd+H")));
+    assert_eq!(hide(Some("Cmd+Alt+E"), no_own, &[]), Some(key("Cmd+H")));
+    // On, ⌘H given back to Extras or to another command by the user: Hide keeps off it.
+    assert_eq!(hide(Some("Cmd+H"), Some(Some(extras())), &[]), Some(key("Ctrl+Cmd+H")));
+    let other = || CommandRef::new("layer.hide");
+    assert_eq!(hide(Some("Ctrl+Cmd+H"), Some(Some(other())), &[("Cmd+H", other())]), None, "both keys are the user's or Extras'");
+}
+
+/// [`user_cmd_h`] finds ⌘H among the keys the user set, as a main or a further key, however it is spelled.
+#[test]
+fn user_cmd_h_reads_the_users_own_keys() {
+    let mut p = photocraft_engine::prefs::Preferences::default();
+    assert_eq!(user_cmd_h(&p), None, "a default is not the user's key");
+    p.shortcuts.insert("layer.hide".into(), "command+h".into());
+    assert_eq!(user_cmd_h(&p), Some(crate::shortcut_dispatch::keymap_command("layer.hide")));
+    p.shortcuts.clear();
+    p.alternate_shortcuts.insert("edit.copy".into(), vec!["F9".into(), "Cmd+H".into()]);
+    assert_eq!(user_cmd_h(&p), Some(crate::shortcut_dispatch::keymap_command("edit.copy")));
+}
+
 /// The standard Mac items (the app menu's Services, Hide, Hide Others, Show All; the Window menu's Minimize, Zoom, Bring
 /// All to Front) appear once in the Mac model, which the layout builds from the source bar in one pass.
 #[test]

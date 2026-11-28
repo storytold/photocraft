@@ -28,10 +28,14 @@ impl PrefsStore {
     pub fn remember<R>(&mut self, f: impl FnOnce(&mut Preferences) -> R) -> R {
         let before = (&self.values.shortcuts, &self.values.alternate_shortcuts, &self.values.toolbar);
         let before = (before.0.clone(), before.1.clone(), before.2.clone());
+        // ⌘H Hides PhotoCraft moves View › Extras's default key, so it changes the keymap too.
+        let cmd_h_hides_app = self.values.interface.cmd_h_hides_app;
         let sections = self.values.sections.clone();
         self.rev += 1;
         let result = f(&mut self.values);
-        if (&before.0, &before.1, &before.2) != (&self.values.shortcuts, &self.values.alternate_shortcuts, &self.values.toolbar) {
+        if (&before.0, &before.1, &before.2) != (&self.values.shortcuts, &self.values.alternate_shortcuts, &self.values.toolbar)
+            || cmd_h_hides_app != self.values.interface.cmd_h_hides_app
+        {
             self.catalog_rev = self.catalog_rev.wrapping_add(1);
         }
         for key in sections.keys().chain(self.values.sections.keys()).collect::<std::collections::BTreeSet<_>>() {

@@ -456,6 +456,60 @@ fn shortcuts_normalise_and_detect_conflicts() {
     assert_eq!(c, vec![("Cmd+J".to_string(), vec!["a".to_string(), "b".to_string()])]);
 }
 
+/// ⌘H Hides PhotoCraft is opt-in: a fresh profile and an older preferences file without the
+/// field keep Photoshop's ⌘H on View › Extras. On, Extras's default moves to ⌃⌘H, and a key the
+/// user gave Extras (or took from it) still wins either way.
+#[test]
+fn cmd_h_hides_app_is_opt_in_and_moves_only_the_extras_default() {
+    let fresh = Preferences::default();
+    assert!(!fresh.interface.cmd_h_hides_app);
+    assert_eq!(fresh.shortcut("view.extras", Some("Cmd+H")), Some("Cmd+H"));
+    let old: Preferences = serde_json::from_value(json!({"interface": {"showTooltips": true}})).unwrap();
+    assert!(!old.interface.cmd_h_hides_app, "an older file without the field stays off");
+    assert_eq!(old.shortcut("view.extras", Some("Cmd+H")), Some("Cmd+H"));
+
+    let mut p = Preferences::default();
+    p.interface.cmd_h_hides_app = true;
+    // Set anyway (`prefs.set`): off macOS Extras keeps ⌘H rather than reading Ctrl+Ctrl+H.
+    assert_eq!(p.shortcut_on(false, "view.extras", Some("Cmd+H")), Some("Cmd+H"));
+    assert_eq!(p.interface.default_shortcut_on(false, "view.extras", Some("Cmd+H")), Some("Cmd+H"));
+    assert_eq!(p.shortcut_on(true, "view.extras", Some("Cmd+H")), Some("Ctrl+Cmd+H"));
+    assert_eq!(p.interface.default_shortcut_on(true, "view.extras", Some("Cmd+H")), Some("Ctrl+Cmd+H"));
+    let mac = cfg!(target_os = "macos");
+    assert_eq!(p.shortcut("view.extras", Some("Cmd+H")), p.shortcut_on(mac, "view.extras", Some("Cmd+H")), "the host's own rule");
+    for mac in [false, true] {
+        assert_eq!(p.shortcut_on(mac, "edit.undo", Some("Cmd+Z")), Some("Cmd+Z"), "other commands keep theirs");
+        for on in [false, true] {
+            p.interface.cmd_h_hides_app = on;
+            p.shortcuts.insert("view.extras".into(), "Cmd+Alt+E".into());
+            assert_eq!(p.shortcut_on(mac, "view.extras", Some("Cmd+H")), Some("Cmd+Alt+E"), "custom Extras key, pref {on}, mac {mac}");
+            p.shortcuts.insert("view.extras".into(), String::new());
+            assert_eq!(p.shortcut_on(mac, "view.extras", Some("Cmd+H")), None, "unbound Extras, pref {on}, mac {mac}");
+            p.shortcuts.remove("view.extras");
+        }
+    }
+    // ⌃⌘H already the user's key for another command: the moved Extras default stays unbound
+    // instead of showing a key that runs that command.
+    p.shortcuts.insert("layer.hide".into(), "Cmd+Ctrl+H".into());
+    assert_eq!(p.shortcut_on(true, "view.extras", Some("Cmd+H")), None, "⌃⌘H taken by another command");
+    assert_eq!(p.shortcut_on(false, "view.extras", Some("Cmd+H")), Some("Cmd+H"), "nothing moved off macOS");
+    assert_eq!(p.shortcut_on(true, "layer.hide", None), Some("Cmd+Ctrl+H"), "the user's own key is kept");
+    p.interface.cmd_h_hides_app = false;
+    assert_eq!(p.shortcut_on(true, "view.extras", Some("Cmd+H")), Some("Cmd+H"), "pref off: Photoshop's ⌘H");
+}
+
+/// A preferences file copied from a Mac doesn't turn ⌘H Hides PhotoCraft on anywhere else, where
+/// the moved Extras default would read Ctrl+Ctrl+H. Each host checks its own side.
+#[test]
+fn cmd_h_hides_app_from_a_file_applies_only_on_macos() {
+    let mut s = session();
+    s.load_prefs_json(r#"{"interface": {"cmdHHidesApp": true}}"#).unwrap();
+    let mac = cfg!(target_os = "macos");
+    assert_eq!(s.prefs().interface.cmd_h_hides_app, mac);
+    let expected = if mac { "Ctrl+Cmd+H" } else { "Cmd+H" };
+    assert_eq!(s.prefs().shortcut("view.extras", Some("Cmd+H")), Some(expected));
+}
+
 #[test]
 fn menus_and_toolbar_customisation_persist() {
     let mut s = session();

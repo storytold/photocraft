@@ -396,9 +396,29 @@ pub struct Interface {
     pub notification_auto_hide: bool,
     /// Seconds a notice stays on screen before it hides itself (Auto Hide Notifications).
     pub notification_duration_seconds: u32,
+    /// macOS: ⌘H hides PhotoCraft, as in every other Mac app, and View › Extras moves to ⌃⌘H.
+    /// Off (the default), Extras keeps Photoshop's ⌘H and Hide moves to ⌃⌘H.
+    pub cmd_h_hides_app: bool,
 }
 
+/// View › Extras, Photoshop's ⌘H, and where it moves when ⌘H hides the app.
+const EXTRAS: &str = "view.extras";
+const EXTRAS_WHEN_CMD_H_HIDES: &str = "Ctrl+Cmd+H";
+
 impl Interface {
+    /// A command's default shortcut as these preferences have it: `default`, except that View ›
+    /// Extras gives ⌘H up to Hide PhotoCraft (`cmd_h_hides_app`). Only on macOS: elsewhere the
+    /// field can still be set (`prefs.set`, a hand-edited file), but the moved key would read
+    /// Ctrl+Ctrl+H.
+    pub fn default_shortcut<'a>(&self, id: &str, default: Option<&'a str>) -> Option<&'a str> {
+        self.default_shortcut_on(cfg!(target_os = "macos"), id, default)
+    }
+
+    /// [`Interface::default_shortcut`] on a Mac or on another host, so each rule can be checked on any host.
+    fn default_shortcut_on<'a>(&self, mac: bool, id: &str, default: Option<&'a str>) -> Option<&'a str> {
+        if id == EXTRAS && self.cmd_h_hides_app && mac { Some(EXTRAS_WHEN_CMD_H_HIDES) } else { default }
+    }
+
     /// The theme id of the slot the appearance mode shows; `Auto` answers the dark slot, since the
     /// system's mode is the shell's to read.
     pub fn shown_theme(&self) -> &str {
@@ -460,6 +480,7 @@ impl Default for Interface {
             show_file_name_in_title: true,
             notification_auto_hide: true,
             notification_duration_seconds: 6,
+            cmd_h_hides_app: false,
         }
     }
 }
@@ -585,7 +606,7 @@ pub use shortcuts::{
 };
 use store::read_lenient;
 pub use store::{InvalidPref, PREFS_VERSION, PrefsStore, read_section};
-pub use validate::{HIDDEN_UNTIL_IMPLEMENTED, LINUX_ONLY, SECTIONS, choices, gpu_adapter_matches, is_color, is_hidden, parse_hex, range};
+pub use validate::{HIDDEN_UNTIL_IMPLEMENTED, LINUX_ONLY, MAC_ONLY, SECTIONS, choices, gpu_adapter_matches, is_color, is_hidden, parse_hex, range};
 #[path = "prefs/theme_ids.rs"]
 pub mod theme_ids;
 use validate::{check_value, get_path, keyed, set_path};
@@ -1789,10 +1810,27 @@ impl Preferences {
 
     /// The shortcut in effect for a command: the user's override, else its default.
     pub fn shortcut<'a>(&'a self, id: &str, default: Option<&'a str>) -> Option<&'a str> {
+        self.shortcut_on(cfg!(target_os = "macos"), id, default)
+    }
+
+    /// [`Preferences::shortcut`] on a Mac or on another host.
+    fn shortcut_on<'a>(&'a self, mac: bool, id: &str, default: Option<&'a str>) -> Option<&'a str> {
         match self.shortcuts.get(id) {
             Some(s) if s.is_empty() => None,
             Some(s) => Some(s.as_str()),
-            None => default,
+            None => {
+                let key = self.interface.default_shortcut_on(mac, id, default);
+                // The moved Extras default stays unbound when the user already gave ⌃⌘H to another
+                // command: their key would win in dispatch, so the menu would show a key that runs
+                // something else.
+                if id == EXTRAS && self.interface.cmd_h_hides_app && key == Some(EXTRAS_WHEN_CMD_H_HIDES) {
+                    let taken = normalize_shortcut(EXTRAS_WHEN_CMD_H_HIDES);
+                    if self.shortcuts.iter().any(|(other, s)| other != id && normalize_shortcut(s) == taken) {
+                        return None;
+                    }
+                }
+                key
+            }
         }
     }
 

@@ -1796,6 +1796,52 @@ fn integrations_apply_without_a_restart() {
     }
 }
 
+/// Interface › ⌘H Hides PhotoCraft: macOS only, off by default; the note says where the other item's ⌘H went.
+#[test]
+fn cmd_h_hides_photocraft_is_an_opt_in_mac_checkbox() {
+    use egui_kittest::kittest::Queryable;
+    let (app, store) = app_with_store();
+    assert!(!app.session.prefs().interface.cmd_h_hides_app);
+    let mut h = prefs_harness(&store, "interface", vec2(1280.0, 800.0), |app| {
+        app.run("prefs.set", json!({"values": {"interface.language": "en"}})).unwrap();
+    });
+    if !cfg!(target_os = "macos") {
+        assert!(h.query_by_label("⌘H Hides PhotoCraft").is_none());
+        return;
+    }
+    h.get_by_label("⌘H Hides PhotoCraft").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label("Hide PhotoCraft uses ⌃⌘H.");
+    h.get_by_label("⌘H Hides PhotoCraft").click();
+    h.run_steps(4);
+    h.get_by_label("View › Extras uses ⌃⌘H.");
+    assert!(!h.state().session.prefs().interface.cmd_h_hides_app, "nothing is written before Apply");
+    h.get_by_label("Apply").click();
+    h.run_steps(4);
+    assert!(h.state().session.prefs().interface.cmd_h_hides_app);
+    assert_eq!(stored(&store)["interface"]["cmdHHidesApp"], json!(true));
+}
+
+/// The note names ⌃⌘H only while Extras would really get it: a key the user gave Extras stays.
+#[test]
+fn cmd_h_note_says_nothing_of_extras_when_it_has_the_users_own_key() {
+    use egui_kittest::kittest::Queryable;
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let (_, store) = app_with_store();
+    let mut h = prefs_harness(&store, "interface", vec2(1280.0, 800.0), |app| {
+        app.run("prefs.set", json!({"values": {"interface.language": "en"}})).unwrap();
+        app.run("edit.keyboardShortcuts", json!({"set": {"view.extras": "Cmd+Alt+E"}, "allowUnknown": true})).unwrap();
+    });
+    h.get_by_label("⌘H Hides PhotoCraft").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label("⌘H Hides PhotoCraft").click();
+    h.run_steps(4);
+    assert!(h.query_by_label("View › Extras uses ⌃⌘H.").is_none());
+    assert!(h.query_by_label("Hide PhotoCraft uses ⌃⌘H.").is_none());
+}
+
 /// The texts the last frame painted, without a trailing colon, with each one's laid-out rect.
 fn painted_texts(h: &egui_kittest::Harness<'static, Box<PhotocraftApp>>) -> Vec<(String, egui::Rect)> {
     fn collect(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {

@@ -284,8 +284,9 @@ fn save_text(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &str, 
 /// `edit.keyboardShortcuts` call: the one writer of the shortcut preferences. An action's function
 /// key belongs to the action, not to a set, so the preferences' own stay whatever set was chosen.
 pub(crate) fn save_keys(app: &mut PhotocraftApp, keymap: &Keymap, profiles: &Profiles) -> Result<Value, String> {
-    let (mut set, mut alternates) = keymap_defs::overrides_to_prefs(keymap.overrides());
     let prefs = app.session.prefs();
+    // ⌘H Hides PhotoCraft moves Extras's default: that key is no override, and Photoshop's ⌘H is.
+    let (mut set, mut alternates) = keymap_defs::overrides_to_prefs_under(&prefs.interface, keymap.overrides());
     let is_action = |id: &String| id.starts_with(photocraft_engine::actions_cmds::PLAY_SHORTCUT_PREFIX);
     set.retain(|id, _| !is_action(id));
     alternates.retain(|id, _| !is_action(id));
@@ -299,7 +300,7 @@ pub(crate) fn save_keys(app: &mut PhotocraftApp, keymap: &Keymap, profiles: &Pro
         .iter()
         .map(|(name, overrides)| {
             let overrides = if name.as_str() == active { keymap.overrides() } else { overrides };
-            let (mut shortcuts, mut alternate_shortcuts) = keymap_defs::overrides_to_prefs(overrides);
+            let (mut shortcuts, mut alternate_shortcuts) = keymap_defs::overrides_to_prefs_under(&prefs.interface, overrides);
             shortcuts.retain(|id, _| !is_action(id));
             alternate_shortcuts.retain(|id, _| !is_action(id));
             (name.clone(), json!({"shortcuts": shortcuts, "alternateShortcuts": alternate_shortcuts}))

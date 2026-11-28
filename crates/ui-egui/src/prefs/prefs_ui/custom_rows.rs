@@ -33,6 +33,7 @@ const GPU_BACKEND: &str = "performance.gpuBackend";
 const GPU_ADAPTER: &str = "performance.gpuAdapter";
 const SCRATCH_DISKS: &str = "scratchDisks.disks";
 const APPEARANCE_MODE: &str = "interface.appearanceMode";
+const CMD_H_HIDES_APP: &str = "interface.cmdHHidesApp";
 const LIGHT_THEME: &str = "interface.lightTheme";
 const DARK_THEME: &str = "interface.darkTheme";
 const FAVORITE_THEMES: &str = "interface.favoriteThemes";
@@ -53,6 +54,8 @@ pub(super) struct PrefsCustom {
     gpu_info: Vec<String>,
     adapters: Vec<String>,
     installed_ram: Option<u64>,
+    /// Whether ⌘H Hides PhotoCraft would put View › Extras on ⌃⌘H ([`extras_moves_with_cmd_h`]).
+    extras_moves: bool,
     /// The agent link's state, for the Agents page.
     #[cfg(not(target_arch = "wasm32"))]
     agent_status: craft::automation::agents::AgentLinkStatus,
@@ -74,6 +77,7 @@ impl PrefsCustom {
             gpu_info,
             adapters: app.perf.gpu_info.adapters.clone(),
             installed_ram: crate::gpu_canvas::physical_memory().filter(|n| *n > 0),
+            extras_moves: extras_moves_with_cmd_h(app),
             #[cfg(not(target_arch = "wasm32"))]
             agent_status: app.services.agent_link.as_ref().map(|link| link.status().clone()).unwrap_or_default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -94,6 +98,7 @@ impl CustomSettings<PrefPages> for PrefsCustom {
             "fileHandling.recentFiles" | "type.favoriteFonts" => self.clear_row(ui, key, draft),
             "tools.pressureCurve" => pressure_curve_row(ui, draft),
             "tools.tabletInput" => tablet_input_row(ui, draft),
+            CMD_H_HIDES_APP => self.cmd_h_hides_app_row(ui, draft),
             APPEARANCE_MODE => self.appearance_row(ui, draft),
             _ => {}
         }
@@ -405,4 +410,32 @@ fn tablet_input_row(ui: &mut egui::Ui, draft: &mut SettingsDraft) {
         ),
     );
     help(ui, tl!("Applies at next launch."));
+}
+
+/// Would ⌘H Hides PhotoCraft put View › Extras on ⌃⌘H? Not when the user gave Extras a key of
+/// their own or unbound it, or when another command has ⌃⌘H.
+fn extras_moves_with_cmd_h(app: &PhotocraftApp) -> bool {
+    const EXTRAS: &str = "view.extras";
+    let mut prefs = app.session.prefs().clone();
+    prefs.interface.cmd_h_hides_app = true;
+    let default = crate::shortcuts::default_shortcut(EXTRAS);
+    prefs.shortcut(EXTRAS, default.as_deref()) == prefs.interface.default_shortcut(EXTRAS, default.as_deref())
+}
+
+impl PrefsCustom {
+    /// ⌘H Hides PhotoCraft, with a note naming the item that takes ⌃⌘H: Hide PhotoCraft while it is off, View ›
+    /// Extras while it is on (unless Extras keeps a key of the user's). macOS only.
+    fn cmd_h_hides_app_row(&self, ui: &mut egui::Ui, draft: &mut SettingsDraft) {
+        let mut on: bool = draft.get(CMD_H_HIDES_APP).unwrap_or_default();
+        let was = on;
+        Checkbox::new(Bind::bound(&mut on)).label(tl!("⌘H Hides PhotoCraft")).show(ui);
+        if on != was {
+            draft.set(CMD_H_HIDES_APP, &on);
+        }
+        if !on {
+            help(ui, tl!("Hide PhotoCraft uses ⌃⌘H."));
+        } else if self.extras_moves {
+            help(ui, tl!("View › Extras uses ⌃⌘H."));
+        }
+    }
 }
