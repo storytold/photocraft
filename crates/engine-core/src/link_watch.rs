@@ -6,9 +6,11 @@
 //!
 //! The active document's linked files are compared by size and modification time with what they
 //! were when last seen; the layers of a file whose stamp moved are re-rendered from it, one
-//! Update Modified Content undo step per file. The desktop app takes the stamps every two seconds
-//! and when its window comes back to the front, on a worker thread so a file on a slow network
-//! share never holds up the interface ([`LinkWatchExt::start_link_scan`], [`LinkWatchExt::poll_link_scan`]);
+//! [`UPDATE_SMART_OBJECTS`] undo step per file for every layer that shows it, as the reference
+//! app names it (Update Modified Content run from the menu keeps its own name). The desktop app
+//! takes the stamps every two seconds and when its window comes back to the front, on a worker
+//! thread so a file on a slow network share never holds up the interface
+//! ([`LinkWatchExt::start_link_scan`], [`LinkWatchExt::poll_link_scan`]);
 //! `layer.smartObjects.updateChanged` takes them on the spot (CLI, agents).
 //!
 //! Stamps are kept per document: one in the background is looked at when it comes to the front.
@@ -27,6 +29,10 @@ use photocraft_doc::{Document, LayerContent, LayerId, SmartSource};
 use serde_json::{Value, json};
 
 use crate::{EngineError, Result, Session};
+
+/// History label of the update a changed linked file makes by itself (not the menu's Update
+/// Modified Content).
+pub const UPDATE_SMART_OBJECTS: &str = "Update Smart Objects";
 
 pub use crate::state::{LinkScan, Stamp};
 
@@ -214,7 +220,7 @@ fn apply_link_stamps(s: &mut Session, doc: u64, now: Vec<(String, Vec<u64>, Opti
     }
     let mut updated = Vec::new();
     for (path, ids) in changed {
-        let r = s.edit("Update Modified Content", |d, _| {
+        let r = s.edit(UPDATE_SMART_OBJECTS, |d, _| {
             for id in &ids {
                 if !crate::smart_cmds::refresh(d, LayerId(*id))? {
                     return Err(EngineError::Other(format!("{path} can't be read")));
@@ -298,7 +304,7 @@ mod tests {
         save(&path, &png(10, 10, "#0000ff"));
         assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated": [id]}));
         assert!(is(centre(&s), BLUE), "{:?}", centre(&s));
-        // An Update Modified Content step: undoing it is respected until the file changes again.
+        // An Update Smart Objects step: undoing it is respected until the file changes again.
         assert!(s.undo());
         assert!(is(centre(&s), RED));
         assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated": []}));

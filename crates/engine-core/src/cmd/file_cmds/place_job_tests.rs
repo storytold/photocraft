@@ -83,7 +83,7 @@ fn a_place_job_equals_the_inline_place() {
             assert_eq!(e.label, "Placing grad.png");
             same_but_layer(got, &want);
             assert_eq!(steps(&s), before + 1, "one undo step");
-            assert_eq!(s.active().unwrap().history.undo_label(), Some(PLACE_EMBEDDED));
+            assert_eq!(s.active().unwrap().history.undo_label(), Some(if smart { PLACE_EMBEDDED } else { PLACE_IMAGE }));
             assert_eq!(layer_pixels(&s), layer_pixels(&inline), "layer pixels at {depth}-bit, smart {smart}");
             assert_eq!(canvas_pixels(&s), canvas_pixels(&inline), "composite at {depth}-bit, smart {smart}");
             assert!(s.undo());
@@ -104,7 +104,7 @@ fn a_linked_place_job_keeps_the_link() {
     let d = s.active().unwrap();
     let l = d.doc.layer(d.active_layer.unwrap()).unwrap();
     assert!(matches!(&l.content, LayerContent::Smart(so) if matches!(&so.source, SmartSource::Linked { path: p } if *p == path)));
-    assert_eq!(d.history.undo_label(), Some("Place Linked"));
+    assert_eq!(d.history.undo_label(), Some(PLACE_LINKED));
 }
 
 /// Bytes with no path (a web or dropped file) start the same job through `start_place_bytes`.
@@ -330,7 +330,7 @@ fn a_cooperative_place_equals_the_inline_place() {
                     assert_eq!((e.command.as_str(), e.label.as_str()), ("file.placeEmbedded", &*format!("Placing {file}")));
                     same_but_layer(got, &want);
                     assert_eq!(steps(&s), before + 1, "{what}: one undo step");
-                    assert_eq!(s.active().unwrap().history.undo_label(), Some(PLACE_EMBEDDED));
+                    assert_eq!(s.active().unwrap().history.undo_label(), Some(if smart { PLACE_EMBEDDED } else { PLACE_IMAGE }));
                     assert_eq!(layer_pixels(&s), layer_pixels(&inline), "{what}: layer pixels");
                     assert_eq!(canvas_pixels(&s), canvas_pixels(&inline), "{what}: composite");
                     if smart {
@@ -376,7 +376,7 @@ fn a_cooperative_place_with_the_default_budget_and_from_bytes() {
     assert!(
         matches!(&d.doc.layer(d.active_layer.unwrap()).unwrap().content, LayerContent::Smart(so) if matches!(&so.source, SmartSource::Linked { path: p } if *p == path))
     );
-    assert_eq!(d.history.undo_label(), Some("Place Linked"));
+    assert_eq!(d.history.undo_label(), Some(PLACE_LINKED));
 }
 
 /// An offset off the tile grid rebuilds the tiles the image touches, and a cooperative place does

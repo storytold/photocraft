@@ -324,8 +324,27 @@ pub(super) fn approve_memory(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------- place ----------
 
-/// History label of an embedded place.
-pub const PLACE_EMBEDDED: &str = "Place Embedded";
+/// History label of an embedded place that makes a smart object (File › Place Embedded).
+pub const PLACE_EMBEDDED: &str = "Place Embedded Smart Object";
+
+/// History label of a place that makes a plain pixel layer (Preferences ▸ General ▸ Always Create
+/// Smart Objects When Placing off, or `"smartObject": false`).
+pub const PLACE_IMAGE: &str = "Place Image";
+
+/// History label of a linked place (File › Place Linked), always a smart object.
+pub const PLACE_LINKED: &str = "Place Linked Smart Object";
+
+/// The history name of a place, after what it made: a `linked` smart object, an embedded `smart`
+/// object, or else a pixel layer.
+pub fn place_label(linked: bool, smart: bool) -> &'static str {
+    if linked {
+        PLACE_LINKED
+    } else if smart {
+        PLACE_EMBEDDED
+    } else {
+        PLACE_IMAGE
+    }
+}
 
 /// Place a file's bytes as a smart object layer, centred, and (with Preferences ▸ General ▸
 /// Resize Image During Place, on by default) scaled down to fit when larger than the canvas.

@@ -136,10 +136,11 @@ fn new_layer_applies_the_transform_first() {
         assert_eq!(st.doc.layers.len(), 3, "placed {placed}");
         let red = st.doc.layers[1].surface().unwrap().content_bounds();
         assert_eq!(red, photocraft_geom::Rect::new(150, 140, 250, 200), "placed {placed}: the moved image, not the original");
-        // History: the transform (folded into Place Embedded for a placed layer), then New Layer.
+        // History: the transform (folded into the place for a placed layer: Place Image, as the placed
+        // layer is a pixel layer), then New Layer.
         let after = history(&h);
         let added: Vec<&str> = after.iter().skip(before.len().saturating_sub(usize::from(placed))).map(String::as_str).collect();
-        let first = if placed { photocraft_engine::file_cmds::PLACE_EMBEDDED } else { "Free Transform" };
+        let first = if placed { photocraft_engine::file_cmds::PLACE_IMAGE } else { "Free Transform" };
         assert_eq!(added, [first, "New Layer"], "placed {placed}: {after:?}");
     }
 }

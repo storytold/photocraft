@@ -48,7 +48,7 @@ use info::file_info;
 pub use info::{CAMERA_FIELDS, camera_data, copyright_marked, read_file_info, write_file_info};
 #[cfg(test)]
 use info::{exposure_text, find_element};
-pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_options, place_bytes, raw_defaults};
+pub use open::{PLACE_EMBEDDED, PLACE_IMAGE, PLACE_LINKED, open_bytes_as, open_bytes_as_with_options, place_bytes, place_label, raw_defaults};
 pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, tag_exr_colorspace};
 use open::{approve_memory, close_all, close_others, open_as, place, revert};
 pub(crate) use open::{batch_open_notice, batch_open_params, remember_batch_open};
@@ -488,6 +488,14 @@ mod layers_to_files_png_names_tests;
 #[cfg(test)]
 #[path = "file_cmds/place_job_tests.rs"]
 mod place_job_tests;
+
+#[cfg(test)]
+#[path = "file_cmds/place_history_names_tests.rs"]
+mod place_history_names_tests;
+
+#[cfg(test)]
+#[path = "file_cmds/place_linked_history_names_tests.rs"]
+mod place_linked_history_names_tests;
 
 #[cfg(test)]
 #[path = "file_cmds/open_as_smart_object_tests.rs"]
