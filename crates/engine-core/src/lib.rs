@@ -225,6 +225,8 @@ pub struct Session {
     typed_layer: Option<(photocraft_doc::DocId, LayerId)>,
     /// Coalescing key of the command being executed.
     pub coalesce_request: Option<String>,
+    /// The serial the last admitted document got ([`DocState::serial`]).
+    pub(crate) doc_serial: u64,
     /// The outer action's original document/history states, independent of command transactions.
     action_history: Option<action_history::ActionHistory>,
     /// Weak leases expire when every copy of a suspended continuation is abandoned.

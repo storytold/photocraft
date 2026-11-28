@@ -209,7 +209,7 @@ pub(super) fn merge_layers(s: &mut Session) -> Result<Value> {
             merged.id = lowest_id;
             merged.blend = base.blend;
             merged.opacity = 1.0;
-            *crate::pixels_mut(&mut merged)? = crate::pixels::composite_layers(&solo, fmt, None);
+            *crate::pixels_mut(&mut merged)? = crate::pixels::composite_layers(&solo, fmt, None)?;
             for id in &ids[1..] {
                 doc.remove(*id);
             }
@@ -229,7 +229,7 @@ pub(super) fn merge_layers(s: &mut Session) -> Result<Value> {
             // lower chain's pixels to the upper chain's base.
             let base = crate::clip_group::base_of(doc, top_id);
             merged.clipped = base.is_some() && solo.layers.iter().all(|l| l.clipped && crate::clip_group::base_of(doc, l.id) == base);
-            *crate::pixels_mut(&mut merged)? = crate::pixels::composite_layers_uncropped(&solo, fmt);
+            *crate::pixels_mut(&mut merged)? = crate::pixels::composite_layers_uncropped(&solo, fmt)?;
             let mid = merged.id;
             // Hidden selected layers are discarded, as in Photoshop.
             for id in &ids[..ids.len() - 1] {

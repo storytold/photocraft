@@ -29,6 +29,10 @@ pub struct DocState {
     damage_log: std::collections::VecDeque<(u64, u64, Option<photocraft_geom::Rect>)>,
     /// Coalescing key of the latest history step (see [`Session::execute`]'s `coalesce` param).
     pub coalesce: Option<String>,
+    /// Unique among all documents this session opened and never reused, unlike `doc.id`, which a
+    /// later document can take once this one closes. Lets a handle to a document (a script's
+    /// `Document`) tell its own document from a newer one. 0 until the session admits it.
+    pub serial: u64,
     /// Channels panel: targeted channel and eye toggles (view state, not history).
     pub channel_view: channel_cmds::ChannelView,
     /// The channel views undo brings back, by the step they belong to: the ids of the history
@@ -146,6 +150,7 @@ impl DocState {
             damage_span: None,
             damage_log: Default::default(),
             coalesce: None,
+            serial: 0,
             channel_view,
             undo_channel_views: Vec::new(),
             isolated_layers: Vec::new(),

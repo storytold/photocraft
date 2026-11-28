@@ -18,17 +18,30 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Inspect Document",
             menu: &[],
             shortcut: None,
-            params: r##"{"document":index?}"##,
+            params: r##"{"document":index?,"serial":n? (the document's never-reused serial from session.inspect; not with document),"history":bool=true (false: without the History panel's rows),"layers":bool=true (false: without the layer tree; neither is built)}"##,
             enabled: has_doc,
             run: |s, p| {
-                let d = match p.get("document") {
-                    Some(v) => {
-                        let i = v.as_u64().and_then(|v| usize::try_from(v).ok()).ok_or_else(|| bad("document.inspect", "`document` must be an index"))?;
-                        s.documents().get(i).ok_or_else(|| EngineError::Other(format!("no document at index {i}")))?
-                    }
-                    None => s.active().ok_or(EngineError::NoDocument)?,
+                let flag = |k: &str| match p.get(k).filter(|v| !v.is_null()) {
+                    Some(v) => v.as_bool().ok_or_else(|| bad("document.inspect", format!("`{k}` must be true or false"))),
+                    None => Ok(true),
                 };
-                Ok(inspect::document(d))
+                let (history, layers) = (flag("history")?, flag("layers")?);
+                let d = if let Some(serial) = p.get("serial").filter(|v| !v.is_null()) {
+                    if p.get("document").is_some_and(|v| !v.is_null()) {
+                        return Err(bad("document.inspect", "give `document` or `serial`, not both"));
+                    }
+                    let n = serial.as_u64().ok_or_else(|| bad("document.inspect", "`serial` must be a document serial"))?;
+                    s.documents().iter().find(|d| d.serial == n).ok_or_else(|| EngineError::Other(format!("no open document has serial {n}")))?
+                } else {
+                    match p.get("document") {
+                        Some(v) => {
+                            let i = v.as_u64().and_then(|v| usize::try_from(v).ok()).ok_or_else(|| bad("document.inspect", "`document` must be an index"))?;
+                            s.documents().get(i).ok_or_else(|| EngineError::Other(format!("no document at index {i}")))?
+                        }
+                        None => s.active().ok_or(EngineError::NoDocument)?,
+                    }
+                };
+                Ok(inspect::document_parts(d, inspect::Parts { history, layers }))
             },
             journal: false,
         },
@@ -37,11 +50,19 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Activate Document",
             menu: &[],
             shortcut: None,
-            params: r##"{"document":index|{"index":uint}} or {"offset":int} (numeric document: zero-based tab index; typed index: one-based opening order; offset: places after the active document in opening order, before it when negative) → {document}"##,
+            params: r##"{"document":index|{"index":uint}} or {"offset":int} or {"serial":n} (numeric document: zero-based tab index; typed index: one-based opening order; offset: places after the active document in opening order, before it when negative; serial: the document's never-reused serial from session.inspect) → {document}"##,
             enabled: has_doc,
             run: |s, p| {
                 // A null key counts as omitted.
                 let given = |k: &str| p.get(k).filter(|v| !v.is_null());
+                if let Some(serial) = given("serial") {
+                    if given("document").is_some() || given("offset").is_some() {
+                        return Err(bad("document.activate", "give one of `document`, `offset` or `serial`"));
+                    }
+                    let n = serial.as_u64().ok_or_else(|| bad("document.activate", "`serial` must be a document serial"))?;
+                    let idx = s.documents().iter().position(|d| d.serial == n).ok_or_else(|| EngineError::Other(format!("no open document has serial {n}")))?;
+                    return if s.set_active(idx) { Ok(json!({"document": idx})) } else { Err(EngineError::NoDocument) };
+                }
                 let idx = match (given("document"), given("offset")) {
                     (Some(_), Some(_)) => return Err(bad("document.activate", "give `document` or `offset`, not both")),
                     (None, None) => return Err(bad("document.activate", "needs `document` (a tab index) or `offset`")),

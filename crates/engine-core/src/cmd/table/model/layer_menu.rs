@@ -273,7 +273,7 @@ fn merging() -> Vec<CommandSpec> {
                 below.push(idx - 1);
                 let lower = doc.layer_at(&below).ok_or(EngineError::NoLayer(id))?.clone();
                 let upper = doc.layer(id).ok_or(EngineError::NoLayer(id))?.clone();
-                let merged = pixels::merge_down(doc, &lower, &upper);
+                let merged = pixels::merge_down(doc, &lower, &upper)?;
                 doc.remove(id);
                 *doc.layer_at_mut(&below).ok_or(EngineError::NoLayer(lower.id))? = merged;
                 *active = Some(lower.id);
@@ -291,6 +291,8 @@ fn merging() -> Vec<CommandSpec> {
         cmd!("layer.flattenImage", "Flatten Image", ["Layer"], None, "{}", has_doc, |s, _| {
             s.edit("Flatten Image", |doc, active| {
                 let fmt = doc.pixel_format();
+                // The composite is a layer the size of the canvas: one past the budget can't be held.
+                crate::allocation::check_layer(doc.bounds(), fmt.bytes_per_pixel() as u64, "Flatten Image")?;
                 let mut bg = Layer::raster("Background", fmt);
                 bg.locks.transparency = true;
                 bg.locks.position = true;

@@ -221,6 +221,8 @@ impl Session {
         }
         self.open_document_order.push(doc.id);
         let mut st = DocState::new(doc, path);
+        self.doc_serial = self.doc_serial.saturating_add(1);
+        st.serial = self.doc_serial;
         st.history.max_states = self.prefs.get().performance.history_states.max(1) as usize;
         st.history.max_bytes = self.prefs.get().performance.history_cap_bytes();
         st.history.non_linear = self.prefs.get().history_options.allow_non_linear_history;

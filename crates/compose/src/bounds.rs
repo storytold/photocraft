@@ -70,7 +70,13 @@ pub fn content_bounds(s: &Surface) -> Rect {
         };
         if let Some((x0, y0, x1, y1)) = b {
             let o = coord.rect();
-            let r = Rect::new(o.x0 + x0 as i32, o.y0 + y0 as i32, o.x0 + x1 as i32, o.y0 + y1 as i32);
+            // Saturating: a tile at the far edge of the 32-bit range must not overflow (a panic).
+            let r = Rect::new(
+                o.x0.saturating_add(i32::from(x0)),
+                o.y0.saturating_add(i32::from(y0)),
+                o.x0.saturating_add(i32::from(x1)),
+                o.y0.saturating_add(i32::from(y1)),
+            );
             out = if out.is_empty() { r } else { out.union(&r) };
         }
     }
