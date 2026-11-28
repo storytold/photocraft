@@ -7,10 +7,10 @@ use egui_kittest::Harness;
 use photocraft_doc::LayerId;
 use serde_json::json;
 
-fn move_controls_fixture() -> (Harness<'static, Box<PhotocraftApp>>, [LayerId; 2]) {
+fn move_controls_fixture(first: [i32; 4]) -> (Harness<'static, Box<PhotocraftApp>>, [LayerId; 2]) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300, "background": "transparent"})).unwrap();
-    let layers = [[60, 60, 80, 60], [230, 150, 40, 40]].map(|rect| {
+    let layers = [first, [230, 150, 40, 40]].map(|rect| {
         app.run("shape.create", json!({"kind": "rect", "rect": rect, "fill": "#ff0000"})).unwrap();
         app.session.active().unwrap().active_layer.unwrap()
     });
@@ -68,7 +68,7 @@ fn in_press_band(h: &mut Harness<'static, Box<PhotocraftApp>>, at: [f64; 2]) -> 
 #[test]
 fn move_controls_allow_auto_select_on_another_layer_outside_the_press_band() {
     for control in [false, true] {
-        let (mut h, layers) = move_controls_fixture();
+        let (mut h, layers) = move_controls_fixture([60, 60, 80, 60]);
         let at = [250.0, 170.0];
         assert!(!in_press_band(&mut h, at));
         assert_eq!(h.state().session.active().unwrap().selected_layers(), vec![layers[0]]);
@@ -85,7 +85,7 @@ fn move_controls_allow_auto_select_on_another_layer_outside_the_press_band() {
 #[test]
 fn move_controls_allow_a_layer_marquee_from_empty_canvas_outside_the_press_band() {
     for control in [false, true] {
-        let (mut h, layers) = move_controls_fixture();
+        let (mut h, layers) = move_controls_fixture([60, 60, 80, 60]);
         let start = [190.0, 125.0];
         let end = [285.0, 210.0];
         assert!(!in_press_band(&mut h, start));
@@ -101,4 +101,35 @@ fn move_controls_allow_a_layer_marquee_from_empty_canvas_outside_the_press_band(
         assert_eq!(state.selected_layers(), vec![layers[1]], "control={control}");
         assert_eq!(state.doc, before);
     }
+}
+
+fn rotation_cursor_is_showing(h: &Harness<'_, Box<PhotocraftApp>>) -> bool {
+    use craft::behavior::{Cursor, PaintedCursor};
+    matches!(craft::ui::runtime::cursor::current(&h.ctx), Some(Cursor::Painted(PaintedCursor::Turn { .. })))
+}
+
+#[test]
+fn move_controls_only_offer_rotation_near_the_frame() {
+    let (mut h, layers) = move_controls_fixture([60, 60, 120, 6]);
+    let far = [250.0, 170.0];
+    assert!(!in_press_band(&mut h, far));
+    move_pointer(&mut h, false, "move", far);
+    assert!(!rotation_cursor_is_showing(&h));
+    move_pointer(&mut h, false, "down", far);
+    move_pointer(&mut h, false, "up", far);
+    assert!(h.state().ui.transform.is_none());
+    assert_eq!(h.state().session.active().unwrap().selected_layers(), [layers[1]]);
+
+    h.state_mut().run("layer.select", json!({"layer": layers[0].0, "mode": "replace"})).unwrap();
+    let near = [50.0, 50.0];
+    assert!(in_press_band(&mut h, near));
+    move_pointer(&mut h, false, "move", near);
+    assert!(rotation_cursor_is_showing(&h));
+    move_pointer(&mut h, false, "down", near);
+    move_pointer(&mut h, false, "move", [42.0, 53.0]);
+    move_pointer(&mut h, false, "move", [32.0, 61.0]);
+    move_pointer(&mut h, false, "up", [32.0, 61.0]);
+    let transform = h.state().ui.transform.as_ref().expect("the rotation cursor has a matching press action");
+    let [top_left, top_right, ..] = transform.quad_array();
+    assert!((top_right[1] - top_left[1]).abs() > 1.0, "the drag rotates the upper edge");
 }
