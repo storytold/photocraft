@@ -139,6 +139,13 @@ pub fn park(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static 
     park_dialog(app, path, copy, record).map(drop)
 }
 
+/// Parks File › Package's TIFF output behind the same TIFF Options dialog used by Save As. The
+/// package directory is carried in the parked path; the answered options are applied to the
+/// packaged document by [`finish`].
+pub(crate) fn park_package(app: &mut PhotocraftApp, dir: String) -> Result<DialogId, String> {
+    park_dialog(app, dir, false, "file.package")
+}
+
 /// [`park`], returning the id of the dialog it opened.
 pub fn park_dialog(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static str) -> Result<DialogId, String> {
     let doc = app.active_doc_id()?;
@@ -173,6 +180,30 @@ pub(crate) fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, save: ParkedS
         pyramid: options.pyramid,
         layers: layered.then_some(!options.discard_layers),
     };
+    // Package has already chosen its output directory. It uses this prompt only to collect the
+    // TIFF encoder settings, then runs the engine command against the requesting document so a
+    // canceled prompt leaves no package folder behind.
+    if save.record == "file.package" {
+        let crate::format_prompts::ParkedSave { doc, path: dir, .. } = save;
+        let mut params = serde_json::json!({
+            "dir": dir,
+            "tiffCompression": compression_name(compression),
+            "tiffPyramid": options.pyramid,
+        });
+        if let Some(transparency) = choice.transparency {
+            params["tiffTransparency"] = transparency.into();
+        }
+        if let Some(layers) = choice.layers {
+            params["tiffLayers"] = layers.into();
+        }
+        let result = app.with_document(doc, |app| app.session.execute("file.package", params).map_err(|e| e.to_string()));
+        match result {
+            Ok(result) => crate::notices::io_result_warnings(app, &result, "Package"),
+            Err(error) => crate::notices::error(app, error),
+        }
+        return;
+    }
+
     let mut step = save.step();
     if let Some(layers) = choice.layers {
         step["tiffLayers"] = layers.into();
@@ -224,5 +255,19 @@ mod tests {
         );
         // No layers answer keeps what the save would do.
         assert!(TiffChoice::default().apply(base).tiff_layers);
+    }
+
+    #[test]
+    fn cancelling_a_packaged_tiff_writes_no_package_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 8, "height": 8, "background": "#336699"})).unwrap();
+        app.session.saved_to(root.path().join("Artwork.tif").to_string_lossy().into_owned());
+        let package_dir = root.path().join("Artwork Folder");
+        let dialog = park_package(&mut app, package_dir.to_string_lossy().into_owned()).unwrap();
+        assert!(app.parked_save.is_some());
+        crate::dialogs::testing::cancel(&mut app, dialog).unwrap();
+        assert!(app.parked_save.is_none());
+        assert!(!package_dir.exists(), "cancel must not create the package folder");
     }
 }

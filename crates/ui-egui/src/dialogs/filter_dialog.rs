@@ -1063,6 +1063,22 @@ pub(crate) fn run_command(app: &mut PhotocraftApp, ctx: &egui::Context, command:
         }
         return outcome;
     }
+    // A native TIFF package asks the ordinary TIFF Options dialog before creating its folder. The
+    // engine remains usable headlessly: callers that provide any TIFF option skip this UI prompt.
+    if command == "file.package"
+        && params.get("format").is_none()
+        && crate::tiff_options_ui::choice_param(&params, command)?.is_none()
+        && app
+            .session
+            .active()
+            .and_then(|d| d.path.as_deref())
+            .and_then(photocraft_engine::file_cmds::extension)
+            .is_some_and(|ext| matches!(ext.as_str(), "tif" | "tiff"))
+    {
+        let dir = params.get("dir").and_then(Value::as_str).ok_or("file.package: missing `dir`")?.to_owned();
+        let dialog = crate::tiff_options_ui::park_package(app, dir)?;
+        return Ok(json!({"dialog": dialog.value().to_string()}));
+    }
     finish(app, ctx, command, params, &captured, &result, token)
 }
 
