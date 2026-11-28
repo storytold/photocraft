@@ -3,7 +3,8 @@
 //! Toolbar-only (`paint.redEye`, empty menu path). The kernel in `photocraft-algo::redeye`
 //! runs on a window around each click plus the mask-filter halo. A `rect` (#12569) is a box
 //! drag: the kernel runs once per separate red region inside the rectangle, every change
-//! clipped to it, one History state.
+//! clipped to it, one History state; a box over more regions than [`MAX_POINTS`] is a
+//! parameter error rather than a partial fix.
 
 use photocraft_algo::redeye::{self, MAX_POINTS, MAX_WINDOW};
 use photocraft_color::ColorMode;
@@ -315,8 +316,15 @@ fn red_eye(s: &mut Session, p: &Value) -> Result<Value> {
                 }
                 let (w, h) = (clip.width() as usize, clip.height() as usize);
                 let window = rgba_region(surf, clip);
-                let mut seeds: Vec<(i32, i32)> =
-                    redeye::region_seeds(&window, w, h, MAX_POINTS).into_iter().map(|(x, y)| (clip.x0.saturating_add(x), clip.y0.saturating_add(y))).collect();
+                // One past the cap: a box over more regions than one run clicks is refused below,
+                // not silently truncated like a longer `points` list already is.
+                let mut seeds: Vec<(i32, i32)> = redeye::region_seeds(&window, w, h, MAX_POINTS + 1)
+                    .into_iter()
+                    .map(|(x, y)| (clip.x0.saturating_add(x), clip.y0.saturating_add(y)))
+                    .collect();
+                if seeds.len() > MAX_POINTS {
+                    return Err(bad(format!("`rect` covers more than {MAX_POINTS} separate red regions; correct a smaller box")));
+                }
                 if let Some(s) = sel.as_ref() {
                     seeds.sort_by_key(|(x, y)| if s.sample_channel(*x, *y, 0) > 0.0 { 0 } else { 1 });
                 }
@@ -359,7 +367,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Red Eye",
         menu: &[],
         shortcut: None,
-        params: r#"{"x":px, "y":px} | {"rect":[x,y,w,h]} | {"points":[[x,y],…] (at most 64)},"pupilSize":1..100=50,"darken":0..100=50,"layer":id?=active,"target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i} → {"damage":[x,y,w,h], "pixels":n}"#,
+        params: r#"{"x":px, "y":px} | {"rect":[x,y,w,h] (at most 64 red regions)} | {"points":[[x,y],…] (at most 64)},"pupilSize":1..100=50,"darken":0..100=50,"layer":id?=active,"target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i} → {"damage":[x,y,w,h], "pixels":n}"#,
         enabled,
         run: red_eye,
         journal: true,
