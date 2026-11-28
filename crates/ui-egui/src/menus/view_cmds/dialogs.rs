@@ -64,7 +64,9 @@ fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>,
     }
     crate::dialogs::params::open_param(app, id, fields, fixed, move |fields: &mut DialogFields| {
         derive(&key, fields);
-        let dialog = ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields));
+        // Lens Correction greys OK while it has nothing to correct (#13986).
+        let ready = key != crate::dialogs::lens_batch_ui::COMMAND || crate::dialogs::lens_batch_ui::missing(fields).is_none();
+        let dialog = ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields)).ok_enabled(ready);
         if image_processor {
             image_processor_ui::settings_footer(dialog)
         } else if calculations {
@@ -79,6 +81,9 @@ fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>,
 /// form's builder runs at each): a row takes one `visible_when` condition, so a row shown by two values is shown by a
 /// shell key that combines them.
 fn derive(id: &str, fields: &mut DialogFields) {
+    if id == crate::dialogs::lens_batch_ui::COMMAND {
+        crate::dialogs::lens_batch_ui::derive(fields);
+    }
     if id == artboard_export_options::COMMAND {
         artboard_export_options::derive(fields);
     }
@@ -477,7 +482,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
             Param::new("detail", tl!("Detail"), ParamKind::number(None, None, 30.0, 1.0, 0)),
             Param::new("saturation", tl!("Saturation"), ParamKind::number(None, None, 20.0, 1.0, 0)),
         ]),
-        crate::dialogs::lens_batch_ui::COMMAND => plain(crate::dialogs::lens_batch_ui::rows(dir.clone())),
+        crate::dialogs::lens_batch_ui::COMMAND => plain(crate::dialogs::lens_batch_ui::rows(app)),
         "file.scripts.imageProcessor" => plain(vec![
             choice(
                 "source",
