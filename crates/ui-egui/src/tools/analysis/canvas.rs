@@ -5,9 +5,10 @@
 //! commands after the host ran, once each, so a second pass in a frame (which gets no new pointer input) edits nothing.
 
 use craft::behavior::kurbo::Point;
-use craft::behavior::{CancelReason, CountMark, Cursor, CursorBadge, CursorIcon, EditEvent, Input, Metrics, Mixed, PaintedCursor};
+use craft::behavior::{CancelReason, CountMark, Cursor, CursorBadge, CursorIcon, EditEvent, Input, Metrics, Mixed, PaintedCursor, PointerButton};
 use craft::color_ui::ui::{ColorSamplerMarks, ColorSamplerTool, ColorSamplers, SamplerEvent};
-use craft::draw::ui::{RulerLine, RulerTool};
+use craft::draw::ui::{RulerLine, RulerPass, RulerTool};
+use craft::keymap::Mods;
 use craft::ui::canvas::{CanvasTool, NoTool, ToolAction, ToolClaims, ToolContext, ToolHostResponse, ToolKey, ToolPath, ToolPointer, canvas_space};
 use craft::ui::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Show as _};
 use craft::ui::fonts::FontRef;
@@ -77,7 +78,7 @@ pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut AnalysisTools, _
     match tool {
         Tool::Ruler => {
             let line = scope.with_app(|app| ruler_line(app));
-            Box::new(ruler.pass(line))
+            Box::new(CommandMoves(ruler.pass(line)))
         }
         // PLAN: with no document the old tool said "No document open" in the status line on a press; the host runs no
         // tool pass without a document, so the message has no caller here.
@@ -95,6 +96,91 @@ pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut AnalysisTools, _
             let deletable = scope.with_app(|app| super::note_alerts::deletable(app));
             Box::new(NotePass { scope, state: note, deletable })
         }
+    }
+}
+
+/// Whether the Ruler, Count or Note tool takes a press of `button` with `mods`: the primary button, except with ⌘
+/// (Ctrl off the Mac) held, which is the Move stand-in's as with the painting tools and the Eyedropper (#12038). The
+/// host then lends the press to the stand-in, so the drag moves the layer and the tool stays selected.
+fn takes_without_command(button: PointerButton, mods: Mods) -> bool {
+    button == PointerButton::Primary && !mods.cmd
+}
+
+/// The framework's Ruler pass with ⌘ left to the Move stand-in ([`takes_without_command`]); every other call is the
+/// Ruler's own.
+struct CommandMoves<'a>(RulerPass<'a>);
+
+impl CanvasTool for CommandMoves<'_> {
+    fn each_pass(&mut self, cx: &mut ToolContext<'_>) {
+        self.0.each_pass(cx);
+    }
+
+    fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
+        self.0.press(pointer, cx)
+    }
+
+    fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        self.0.drag(pointer, cx);
+    }
+
+    fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        self.0.release(pointer, cx);
+    }
+
+    fn hover(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        self.0.hover(pointer, cx);
+    }
+
+    fn cancel(&mut self, reason: CancelReason, cx: &mut ToolContext<'_>) {
+        self.0.cancel(reason, cx);
+    }
+
+    fn claims(&self) -> ToolClaims {
+        self.0.claims()
+    }
+
+    fn regions(&self) -> Vec<craft::ui::canvas::ToolRegion> {
+        self.0.regions()
+    }
+
+    fn key(&mut self, key: &ToolKey, cx: &mut ToolContext<'_>) -> bool {
+        self.0.key(key, cx)
+    }
+
+    fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        self.0.paint(draw, cx);
+    }
+
+    fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        self.0.cursor(cx)
+    }
+
+    fn takes(&self, button: PointerButton, mods: Mods) -> bool {
+        takes_without_command(button, mods) && self.0.takes(button, mods)
+    }
+
+    fn autoscrolls(&self) -> bool {
+        self.0.autoscrolls()
+    }
+
+    fn autoscrolls_on_hover(&self) -> bool {
+        self.0.autoscrolls_on_hover()
+    }
+
+    fn view_only(&self) -> bool {
+        self.0.view_only()
+    }
+
+    fn takes_every_move(&self) -> bool {
+        self.0.takes_every_move()
+    }
+
+    fn access(&self, cx: &ToolContext<'_>) -> Option<craft::ui::canvas::ToolAccess> {
+        self.0.access(cx)
+    }
+
+    fn command_form(&self) -> ToolPath {
+        self.0.command_form()
     }
 }
 
@@ -373,6 +459,10 @@ impl CanvasTool for CountPass<'_> {
         }
     }
 
+    fn takes(&self, button: PointerButton, mods: Mods) -> bool {
+        takes_without_command(button, mods)
+    }
+
     fn autoscrolls(&self) -> bool {
         false
     }
@@ -464,6 +554,10 @@ impl CanvasTool for NotePass<'_> {
     }
 
     fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn takes(&self, button: PointerButton, mods: Mods) -> bool {
+        takes_without_command(button, mods)
+    }
 
     fn autoscrolls(&self) -> bool {
         false
