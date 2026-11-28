@@ -116,8 +116,8 @@ pub(super) struct Preset {
 
 /// The preset of `prefs`' toolbar: its layout and each tool's letter in effect. Settings PhotoCraft
 /// has none of yet (the Show toggles, Disable Shortcuts for Hidden Toolbar Extras) are written with
-/// their defaults: shown, off.
-pub(super) fn write(prefs: &Preferences) -> Vec<u8> {
+/// their defaults: shown, off. A layout the file can't hold is an error, not a file `read` refuses.
+pub(super) fn write(prefs: &Preferences) -> Result<Vec<u8>, String> {
     let layout = prefs.toolbar.layout();
     let groups = |groups: &[Vec<String>]| -> Vec<Vec<Tool>> {
         groups
@@ -139,6 +139,7 @@ pub(super) fn write(prefs: &Preferences) -> Vec<u8> {
             .collect()
     };
     tbr::write(&ToolbarPreset { toolbar: groups(&layout.toolbar), extras: groups(&layout.extras), ..ToolbarPreset::default() })
+        .map_err(|e| format!("could not write the toolbar preset: {e}"))
 }
 
 /// Read a preset. A file `craft_psd::tbr` refuses is refused; inside the lists, tools that aren't

@@ -34,7 +34,7 @@ fn default_toolbar() -> Vec<Vec<Tool>> {
 
 /// The default preset with its toolbar groups replaced.
 fn with_toolbar(groups: Vec<Vec<Tool>>) -> Vec<u8> {
-    tbr::write(&ToolbarPreset { toolbar: groups, ..tbr::read(&save(&mut crate::session())).unwrap() })
+    tbr::write(&ToolbarPreset { toolbar: groups, ..tbr::read(&save(&mut crate::session())).unwrap() }).unwrap()
 }
 
 /// A descriptor as presets hold them, for files the shared reader refuses.

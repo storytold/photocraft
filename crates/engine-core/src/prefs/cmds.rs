@@ -183,7 +183,7 @@ fn toolbar(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out = json!({"toolbar": layout.toolbar, "extras": layout.extras});
     // Written before the change is kept, so a target that can't be written changes nothing.
     if let Some(target) = save {
-        let bytes = toolbar_presets::write(&next);
+        let bytes = toolbar_presets::write(&next).map_err(|e| bad(cmd, e))?;
         match target {
             None => out["preset"] = json!(photocraft_paint::tile::b64_encode(&bytes)),
             Some(path) => {
