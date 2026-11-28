@@ -159,6 +159,43 @@ fn only_the_selected_characters_are_previewed_in_the_new_colour() {
     assert_eq!(committed(&app).3, history, "the typing session's history is untouched");
 }
 
+/// #16649: the canvas editor draws no highlight over the selected characters while the text Color
+/// Picker is open on them, so the previewed colour shows against the image. OK and Cancel bring it
+/// back; a picker that previews nothing on the text (the foreground's) leaves it.
+#[test]
+fn the_selection_highlight_hides_while_the_text_colour_picker_is_open() {
+    use craft::text::ui::editor::TextEditorHost as _;
+    let mut app = app_at(8);
+    let id = new_type_layer(&mut app, "Hello world");
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id.0,
+        document: None,
+        caret: 11,
+        anchor: 6,
+        session: "type-color-highlight-test".into(),
+        created: false,
+        mask: false,
+    });
+    let highlight = |app: &mut PhotocraftApp| crate::type_tool::LayerHost::for_editor(app, id).selection_quads(6..11).len();
+    assert!(highlight(&mut app) > 0, "the selected characters are highlighted");
+
+    let dialog = pick(&mut app, "#00ff00");
+    assert_eq!(highlight(&mut app), 0, "no highlight over the previewed colour");
+    assert!(display_doc(&mut app, 0).is_some(), "the picked colour is previewed meanwhile");
+    crate::dialogs::testing::cancel(&mut app, dialog).unwrap();
+    assert!(highlight(&mut app) > 0, "Cancel brings the highlight back");
+
+    let dialog = pick(&mut app, "#ff8800");
+    assert_eq!(highlight(&mut app), 0);
+    crate::dialogs::testing::confirm(&mut app, dialog).unwrap();
+    assert!(highlight(&mut app) > 0, "OK brings the highlight back");
+
+    let fg = crate::color_picker_ui::open(&mut app, "foreground");
+    set_color(&mut app, "#ff0000");
+    assert!(highlight(&mut app) > 0, "the foreground's picker keeps the highlight");
+    crate::dialogs::testing::cancel(&mut app, fg).unwrap();
+}
+
 #[test]
 fn no_preview_for_other_pickers_other_tabs_or_other_commands() {
     let mut app = app_at(8);

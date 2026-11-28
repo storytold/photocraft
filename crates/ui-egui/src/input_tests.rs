@@ -832,3 +832,69 @@ fn marquee_drag_after_hiding_extras_restores_selection_visibility() {
     h.state_mut().run("edit.fill", json!({"color": "#22cc44"})).unwrap();
     assert!(!h.state().ui.view.extras, "painting an existing selection must preserve the user's hide choice");
 }
+
+/// #16649: with characters selected in a type edit, a click on the canvas under the text Color Picker samples into
+/// the picker and leaves the edit, its selection and the layer as they were: on the image away from the text, on the
+/// text, just beside it where the editor's own reach starts, and in the move reach around it. OK then recolours the
+/// characters that were selected.
+#[test]
+fn sampling_under_the_text_color_picker_keeps_the_text_selection() {
+    for spot in ["away from the text", "on the text", "beside the text", "in the move reach"] {
+        let mut h = harness();
+        h.state_mut().run("shape.create", json!({"kind": "rect", "rect": [0, 0, 400, 300], "fill": "#ff0000"})).unwrap();
+        let text = json!({"text": "Hello world", "color": "#ffffff", "size": 8, "x": 100, "y": 120});
+        let layer = h.state_mut().run("type.create", text).unwrap()["layer"].as_u64().unwrap();
+        h.state_mut().ui.tool = crate::state::Tool::Type;
+        let ctx = h.ctx.clone();
+        crate::type_tool::edit_active(h.state_mut(), &ctx).unwrap();
+        if let Some(ed) = h.state_mut().ui.text_edit.as_mut() {
+            (ed.anchor, ed.caret) = (6, 11);
+        }
+        // 400 %: the red image covers the whole canvas, and the text lies left of the picker.
+        let v = &mut h.state_mut().ui.views[0];
+        (v.zoom, v.center) = (4.0, [200.0, 150.0]);
+        v.clear_pending();
+        h.run_steps(3);
+        crate::type_tool::open_color_picker(h.state_mut(), [0.0; 3]);
+        h.run_steps(3);
+        let id = photocraft_doc::LayerId(layer);
+        let corners = |app: &mut PhotocraftApp| {
+            let (rect, aff) = crate::type_transform::source_rect(app, id).expect("the text has bounds");
+            crate::type_transform::quad_of(rect, &aff).expect("the text has corners")
+        };
+        let before = corners(h.state_mut());
+        let (left, right) = (before[0].x.min(before[3].x), before[1].x.max(before[2].x));
+        let middle = (before[0].y + before[3].y) / 2.0;
+        let r = h.state().last_canvas_rect;
+        let p = match spot {
+            "on the text" => crate::canvas::testing::to_screen(h.state(), [left + (right - left) * 0.25, middle]),
+            "beside the text" => crate::canvas::testing::to_screen(h.state(), [left - 1.0, middle]),
+            "in the move reach" => crate::canvas::testing::to_screen(h.state(), [left - 5.0, middle]),
+            _ => pos2(r.left() + 60.0, r.bottom() - 60.0),
+        };
+        assert!(r.shrink(40.0).contains(p), "{spot}: the click is on the image, clear of the rulers, at {p:?} in {r:?}");
+        h.hover_at(p);
+        h.run_steps(1);
+        press(&mut h, p, true);
+        press(&mut h, p, false);
+        h.run_steps(2);
+        let edit = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().ui.text_edit.as_ref().map(|ed| (ed.layer, ed.anchor, ed.caret));
+        assert_ne!(picker_color(&h), "#000000", "{spot}: the click samples into the picker");
+        assert_eq!(edit(&h), Some((layer, 6, 11)), "{spot}: the type edit and its selection stay");
+        assert_eq!(corners(h.state_mut()), before, "{spot}: the text stays where it was");
+        if spot != "away from the text" {
+            continue;
+        }
+        assert_eq!(picker_color(&h), "#ff0000", "the click samples the image");
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        assert!(!h.state().dialog_open(), "OK closes the picker");
+        assert_eq!(edit(&h), Some((layer, 6, 11)), "the selection is still there after OK");
+        let doc = h.state().session.active().unwrap().doc.clone();
+        let Some(photocraft_doc::LayerContent::Text(text)) = doc.layer(id).map(|l| &l.content) else { panic!("not a type layer") };
+        // The text is ASCII: a run's bytes are its characters.
+        let colours: Vec<[u8; 4]> = text.char_runs().iter().flat_map(|run| std::iter::repeat_n(run.style.color.to_rgba8(), run.len)).collect();
+        assert_eq!(colours.first(), Some(&[255, 255, 255, 255]), "outside the selection the text keeps its colour");
+        assert_eq!(colours.get(6), Some(&[255, 0, 0, 255]), "OK recolours the selected characters with the sample");
+    }
+}

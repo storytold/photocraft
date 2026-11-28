@@ -19,10 +19,12 @@ use serde_json::Value;
 use crate::PhotocraftApp;
 use crate::color_picker_ui::{PickTarget, hex};
 
-/// The commands previewed: the text colour (`type_tool::open_color_picker`) and a gradient fill
-/// layer's colour stop (`gradient_ui::edit_stop_color`). Only commands that edit the active
-/// document belong here: a preset editor's picker (`gradient.presets.stop`) changes no pixels.
-const COMMANDS: [&str; 2] = ["type.setStyle", photocraft_engine::gradient_fill_cmds::STOP];
+/// The text colour's command (`type_tool::open_color_picker`).
+const TEXT_COLOR: &str = "type.setStyle";
+/// The commands previewed: the text colour and a gradient fill layer's colour stop
+/// (`gradient_ui::edit_stop_color`). Only commands that edit the active document belong here: a
+/// preset editor's picker (`gradient.presets.stop`) changes no pixels.
+const COMMANDS: [&str; 2] = [TEXT_COLOR, photocraft_engine::gradient_fill_cmds::STOP];
 /// Preview cache keys carry this bit so they never equal a committed document's key (0).
 const TAG: u64 = 1 << 60;
 /// How many previewed colours keep their ink bounds for canvas invalidation.
@@ -91,6 +93,20 @@ fn target_layers(params: &Value) -> Vec<LayerId> {
     let one = params.get("layer").and_then(Value::as_u64);
     let many = params.get("layers").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_u64);
     one.into_iter().chain(many).map(LayerId).collect()
+}
+
+/// Whether a text Color Picker is open on type layer `layer` of the active document, under any
+/// dialogs stacked over it. The type tool then hides its selection highlight, which would cover
+/// the colour previewed on the selected characters (#16649).
+pub(crate) fn recolouring_text(app: &PhotocraftApp, layer: LayerId) -> bool {
+    let active = app.session.active().map(|st| st.doc.id);
+    crate::color_picker_ui::find(app, |t| match t {
+        PickTarget::Command { command, params, document } => {
+            command == TEXT_COLOR && document.is_none_or(|d| Some(d) == active) && target_layers(params).contains(&layer)
+        }
+        _ => false,
+    })
+    .is_some()
 }
 
 /// The bounds of `layers` in `doc` (empty when none has pixels yet).
