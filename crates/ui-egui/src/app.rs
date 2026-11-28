@@ -125,6 +125,7 @@ impl PhotocraftApp {
             liquify: None,
             gallery: None,
             vanishing: None,
+            vanishing_committing: Vec::new(),
             layer_style_target: None,
             select_mask_target: None,
             guide_layout_doc: None,

@@ -480,6 +480,8 @@ pub struct PhotocraftApp {
     pub(crate) liquify: Option<liquify_ui::LiquifyApp>,
     pub(crate) gallery: Option<gallery_ui::GalleryApp>,
     pub(crate) vanishing: Option<vp_ui::VpApp>,
+    /// Vanishing Point commits running as background jobs, each with the session it closed (`vp_ui::on_job_event`).
+    pub(crate) vanishing_committing: Vec<vp_ui::VpCommitting>,
     /// The Layer Style, Select and Mask and parameter dialogs' open targets, one field per family,
     /// keyed by the dialog.
     pub(crate) layer_style_target: Option<(craft::ui::dialog::DialogId, DocId, photocraft_doc::LayerId)>,

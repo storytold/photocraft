@@ -25,6 +25,7 @@ use craft::ui::runtime::pending::Job;
 use egui::{Color32, ColorImage};
 use photocraft_algo::vanishing::{Edge, PlaneCheck as AlgoCheck, Scene, VpPlane, clone_dabs_from, clone_source};
 use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId};
+use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome};
 use photocraft_engine::vp_cmds::{MAX_CLONE_DABS, MAX_CLONE_STROKES, VP, copy_changed, over, paste_onto, visible_image};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
@@ -132,6 +133,7 @@ pub(crate) struct VpApp {
 }
 
 /// The clipboard image the paste lands as, with its content bounds.
+#[derive(Clone)]
 struct Clip {
     surface: Surface,
     rect: Rect,
@@ -516,6 +518,22 @@ impl VanishingScene for PcVanishingScene {
     }
 }
 
+/// A Vanishing Point commit running as a background job (#210), with what it closed: a failed or cancelled job gives
+/// the workspace back with its own planes, paste and strokes ([`on_job_event`]). One per job, since commits on
+/// different documents can run at once.
+pub(crate) struct VpCommitting {
+    /// The commit's job.
+    job: JobId,
+    /// The document and layer the workspace was opened on.
+    document: DocId,
+    layer: LayerId,
+    /// The clipboard image the workspace pasted.
+    clip: Option<Clip>,
+    /// The workspace's planes, paste and strokes, and its bar.
+    session: VanishingPointSession,
+    settings: VanishingPointSettings,
+}
+
 /// Starts Vanishing Point on the active pixel layer.
 pub fn begin(app: &mut PhotocraftApp, _ctx: &egui::Context) -> Result<(), String> {
     if app.ui.transform.is_some() {
@@ -523,6 +541,25 @@ pub fn begin(app: &mut PhotocraftApp, _ctx: &egui::Context) -> Result<(), String
     }
     let st = app.session.active().ok_or("no document")?;
     let layer = st.active_layer.ok_or("no active layer")?;
+    let clip = app.session.clipboard.as_ref().and_then(|c| {
+        let r = c.surface.content_bounds();
+        (!r.is_empty()).then(|| Clip { surface: c.surface.clone(), rect: r })
+    });
+    open_on(app, layer, clip, None)
+}
+
+/// Opens the workspace on `layer` of the active document with `clip` to paste, from `restore`'s planes, paste, strokes
+/// and bar when given (a commit given back), else from the defaults.
+fn open_on(
+    app: &mut PhotocraftApp,
+    layer: LayerId,
+    clip: Option<Clip>,
+    restore: Option<(VanishingPointSession, VanishingPointSettings)>,
+) -> Result<(), String> {
+    if app.ui.transform.is_some() {
+        return Err("finish Free Transform first".into());
+    }
+    let st = app.session.active().ok_or("no document")?;
     let (name, surface) = match st.doc.layer(layer) {
         Some(l) => match &l.content {
             LayerContent::Raster(s) => (l.name.clone(), s.clone()),
@@ -532,20 +569,23 @@ pub fn begin(app: &mut PhotocraftApp, _ctx: &egui::Context) -> Result<(), String
     };
     let canvas = st.doc.bounds();
     let (base, document) = (st.doc.clone(), st.doc.id);
-    let clip = app.session.clipboard.as_ref().and_then(|c| {
-        let r = c.surface.content_bounds();
-        (!r.is_empty()).then(|| Clip { surface: c.surface.clone(), rect: r })
-    });
     let source = Arc::new(PcVanishingSource::new(base, layer, &surface, canvas, clip));
-    let mut settings = VanishingPointSettings::default();
+    let restored = restore.is_some();
+    let (session, mut settings) = restore.unwrap_or_default();
     settings.paste = source.has_paste();
 
     let open = VanishingPointOpen::new([canvas.width(), canvas.height()], name, StampLimits::new(MAX_CLONE_STROKES, MAX_CLONE_DABS))
         .settings(settings)
+        .session(session)
         .navigation(crate::canvas::document_display::navigation(app))
         .checkerboard(crate::canvas::document_display::checkerboard(app).unwrap_or_default());
     let dynamic: Arc<dyn VanishingPointSource> = source.clone();
     let dialog = app.framework.dialogs.open(HostedWorkspace::new(VanishingPointWorkspace::new(open), dynamic).held_ok());
+    // Given back strokes show at once, as they did before OK.
+    if restored && let Some(hosted) = app.framework.dialogs.get_by_id::<Hosted>(dialog) {
+        *locked(&source.preview.latest) = PaintContext::of(hosted.workspace(), source.has_paste());
+        source.preview.paint_latest(hosted.workspace().session());
+    }
     app.vanishing = Some(VpApp { document, layer, dialog, source });
     app.ui.status = tl!("Vanishing Point: click four corners to create a plane").into();
     Ok(())
@@ -557,10 +597,12 @@ fn in_flight<T>(event: &EditEvent<T>) -> bool {
 }
 
 /// Runs OK's command: `filter.vanishingPoint` with the planes, the paste and the strokes, on the layer the workspace
-/// opened on. With nothing to paste or clone there is nothing to run.
-fn apply(app: &mut PhotocraftApp, layer: LayerId, command: &VanishingPointCommand) -> Result<(), String> {
+/// opened on. With nothing to paste or clone there is nothing to run. With background jobs on, the command is a job
+/// (#210): its id comes back, and the edit lands when the job ends. The paste is `clip`, the image the workspace
+/// showed, not whatever the clipboard holds now (a workspace given back after a cancel keeps its own image).
+fn apply(app: &mut PhotocraftApp, layer: LayerId, clip: Option<&Clip>, command: &VanishingPointCommand) -> Result<Option<JobId>, String> {
     if command.paste.is_empty() && command.clone.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     let mut params = serde_json::to_value(command).map_err(|e| e.to_string())?;
     // The layer is named only when another one became active meanwhile, so a recorded action stays portable.
@@ -570,7 +612,15 @@ fn apply(app: &mut PhotocraftApp, layer: LayerId, command: &VanishingPointComman
     {
         params["layer"] = json!(layer.0);
     }
-    app.run(VP, params).map(|_| ())
+    if !command.paste.is_empty() {
+        app.session.vanishing_paste = clip.map(|c| c.surface.clone());
+    }
+    let r = app.run(VP, params);
+    // The command takes it; a call refused before it ran must not leave it for the next one.
+    app.session.vanishing_paste = None;
+    let r = r?;
+    let pending = r.get("pending").and_then(Value::as_bool) == Some(true);
+    Ok(r.get("job").and_then(Value::as_u64).filter(|_| pending).map(JobId))
 }
 
 /// The workspace's pump (a `TAKERS` row): paints the strokes the workspace reported, shows its refusals, answers a held
@@ -608,15 +658,49 @@ pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
         app.ui.status_error = message.tone == Tone::Bad;
     }
     if let Some(command) = ok {
-        let answer = apply(app, layer, &command);
-        if let Err(e) = &answer {
-            // The planes, source and strokes stay so the user can fix the cause and retry.
-            app.ui.status = e.clone();
-            app.ui.status_error = true;
+        let answer = apply(app, layer, source.preview.inputs.clip.as_ref(), &command);
+        match &answer {
+            // A background job: the workspace closes while it runs, and its session waits for the job, so a failure
+            // or a cancel can give it back.
+            Ok(Some(job)) => {
+                if let (Some(hosted), Some(vp)) = (app.framework.dialogs.get_by_id::<Hosted>(id), app.vanishing.as_ref()) {
+                    app.vanishing_committing.push(VpCommitting {
+                        job: *job,
+                        document: vp.document,
+                        layer,
+                        clip: source.preview.inputs.clip.clone(),
+                        session: hosted.workspace().session().clone(),
+                        settings: *hosted.workspace().settings(),
+                    });
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                // The planes, source and strokes stay so the user can fix the cause and retry.
+                app.ui.status = e.clone();
+                app.ui.status_error = true;
+            }
         }
         if let Some(hosted) = app.framework.dialogs.get_mut_by_id::<Hosted>(id) {
-            hosted.answer_ok(answer.map_err(Into::into));
+            hosted.answer_ok(answer.map(|_| ()).map_err(Into::into));
         }
+    }
+}
+
+/// A job ended (see [`crate::jobs_ui`]): when it was a Vanishing Point commit that failed or was cancelled, the
+/// workspace comes back with that commit's planes, paste and strokes, as after an inline error, so the user can fix the
+/// cause and retry. Only when no workspace is open, the document is still the active one and the layer still exists.
+/// The commit's entry goes either way; other commits' entries stay. Its status and errors are reported like any job's.
+pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) {
+    let Some(i) = app.vanishing_committing.iter().position(|c| c.job == e.id) else { return };
+    let c = app.vanishing_committing.remove(i);
+    if matches!(e.outcome, JobOutcome::Done(_)) {
+        return;
+    }
+    let back = app.vanishing.is_none() && app.session.active().is_some_and(|st| st.doc.id == c.document && st.doc.layer(c.layer).is_some());
+    // A refusal (Free Transform began meanwhile) leaves the workspace closed; the job's own report stands.
+    if back {
+        let _ = open_on(app, c.layer, c.clip, Some((c.session, c.settings)));
     }
 }
 
