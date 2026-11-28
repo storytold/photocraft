@@ -1190,6 +1190,11 @@ impl PresetStoreExt for Session {
             let found = self.tools.presets.iter().position(|x| x.name.eq_ignore_ascii_case(&p.name));
             match found {
                 Some(i) if self.tools.presets[i].builtin && self.tools.presets[i] != p => std::sync::Arc::make_mut(&mut *self.tools.presets)[i] = p,
+                Some(_) if !p.builtin => {
+                    // User presets may intentionally share a name. Preserve each saved entry;
+                    // only a builtin is reconciled with its factory entry above.
+                    std::sync::Arc::make_mut(&mut *self.tools.presets).push(p)
+                }
                 Some(_) => {}
                 None => std::sync::Arc::make_mut(&mut *self.tools.presets).push(p),
             }
