@@ -601,8 +601,16 @@ fn exposure(v: f32, p: vec4<f32>) -> f32 {
         if (p.z == 1.0) { return lin; }
         return sign(lin) * pow(abs(lin), 1.0 / p.z);
     }
+    if (p.x == 1.0 && p.y == 0.0 && p.z == 1.0) { return v; }
     let lin = pow(max(t_decode(v, p.w) * p.x + p.y, 0.0), 1.0 / p.z);
+    if (p.w == 2.2) { return clamp(exposure_encode(lin), 0.0, 1.0); }
     return clamp(t_encode(lin, p.w), 0.0, 1.0);
+}
+
+// compose::adjust::exposure_encode: an RGB document's 2.2 power with a linear toe near black.
+fn exposure_encode(v: f32) -> f32 {
+    if (v < 2.44e-4) { return max(v, 0.0) * 93.4; }
+    return pow(v, 1.0 / 2.2);
 }
 
 // Mirrors compose::adjust::levels_float; coefficients are master, R, G, B in LUT row 0.
