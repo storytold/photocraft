@@ -317,3 +317,21 @@ fn another_schema_dialog_keeps_its_generated_rows() {
         assert!(rows > 0, "and the range row it built for `radius`");
     });
 }
+
+/// The policy entry is one catalog string, not an English prefix with the space name glued on: a
+/// language that puts its words in another order shows its own row for the whole caption.
+#[test]
+fn the_policy_caption_translates_as_one_string() {
+    let de = crate::i18n::fixture_lang(
+        "de",
+        "\tConvert to Working RGB\tIn Arbeits-RGB konvertieren\n\tConvert to Working CMYK\tIn Arbeits-CMYK konvertieren\n\tConvert to Working Gray\tIn Arbeits-Grau konvertieren\n",
+    );
+    crate::i18n::with_language(de, || {
+        for (key, caption) in
+            [("policyRgb", "In Arbeits-RGB konvertieren"), ("policyCmyk", "In Arbeits-CMYK konvertieren"), ("policyGray", "In Arbeits-Grau konvertieren")]
+        {
+            let labels: Vec<String> = options(key).into_iter().map(|(_, label)| label).collect();
+            assert_eq!(labels, vec!["Off".to_owned(), "Preserve Embedded Profiles".to_owned(), caption.to_owned()], "{key}");
+        }
+    });
+}

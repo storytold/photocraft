@@ -51,10 +51,11 @@ fn opts(list: &[(&'static str, &'static str)]) -> Vec<(String, Label)> {
 }
 
 /// The menu of a colour management policy, in the reference dialog's order. Only the last entry names
-/// the space the policy converts to.
-fn policy_options(space: &'static str) -> Vec<(String, Label)> {
+/// the space the policy converts to, as one whole caption per space so a translation can put its
+/// own words in its own order.
+fn policy_options(convert_caption: &'static str) -> Vec<(String, Label)> {
     let mut options = vec![("off".to_owned(), Label::from(tl!("Off"))), ("preserve".to_owned(), Label::from(tl!("Preserve Embedded Profiles")))];
-    options.push(("convert".to_owned(), Label::from(tl!("Convert to Working").to_string() + " " + space)));
+    options.push(("convert".to_owned(), Label::from(tl!(convert_caption))));
     options
 }
 
@@ -97,9 +98,9 @@ pub(crate) fn rows(app: &PhotocraftApp) -> Vec<Param> {
         // dot-gain field stays, under the reference's name for the row.
         Param::new("spotDotGain", tl!("Spot"), ParamKind::range(SPOT_MIN, SPOT_MAX, SPOT_DEFAULT, SliderScale::Linear)),
         Param::section(tl!("Color Management Policies")).beside(),
-        choice("policyRgb", "RGB", policy_options("RGB")),
-        choice("policyCmyk", "CMYK", policy_options("CMYK")),
-        choice("policyGray", "Gray", policy_options("Gray")),
+        choice("policyRgb", "RGB", policy_options("Convert to Working RGB")),
+        choice("policyCmyk", "CMYK", policy_options("Convert to Working CMYK")),
+        choice("policyGray", "Gray", policy_options("Convert to Working Gray")),
         Param::read_only_text("profileMismatches", Label::Empty, tl!("Profile Mismatches:")).full_width(),
         choice_bool("askOnMismatch", "Ask When Opening", true),
         choice_bool("askOnPaste", "Ask When Pasting", true),
