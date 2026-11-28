@@ -415,8 +415,8 @@ impl CanvasTool for MoveRun<'_> {
 
     fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
         let Some(run) = self.state.run.as_ref().filter(|r| r.moved && matches!(r.kind, Kind::Layers | Kind::Pixels)) else { return };
-        // The layers follow the pointer themselves; the arrow only when they can't.
-        if self.scope.with_app(|app| crate::move_ui::showing(app)) {
+        // The layers follow the pointer themselves, or their snapshot does; the arrow only when neither can.
+        if self.scope.with_app(|app| crate::move_ui::showing(app) || crate::move_ui::snapshot_drag(app)) {
             return;
         }
         let Some(space) = cx.space() else { return };

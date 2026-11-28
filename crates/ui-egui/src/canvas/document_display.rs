@@ -326,7 +326,10 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         selection_controls(app, ui, body.rect, idx, &label);
         // The Levels clipping display, over the picture and under the controls: it joins the canvas's picture slot
         // after the picture.
-        let clipping = if primary { crate::levels_clipping::shapes(app, ctx, &space.view, idx) } else { Vec::new() };
+        let mut clipping = if primary { crate::levels_clipping::shapes(app, ctx, &space.view, idx) } else { Vec::new() };
+        // A costly Move drag's picture of the layers, at the pointer, in every view of the dragged document (its
+        // canvas hides them meanwhile).
+        clipping.extend(crate::move_ui::snapshot_shapes(app, ctx, &space.view, idx));
         // Color Range's Selection Preview: the dialog's proxy mask, drawn by the selection overlay without ants.
         if let Some(preview) = crate::color_range_ui::selection_preview(app, ctx) {
             SelectionOverlay::new(format!("{label} Selection Preview"), &*preview.mask)
