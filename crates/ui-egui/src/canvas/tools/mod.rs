@@ -695,6 +695,14 @@ fn with_rig<R>(
 pub(crate) fn run(app: &mut PhotocraftApp, ui: &egui::Ui, host: CanvasHost, out: &ToolPass, shown: BodyShown) -> ToolHostResponse {
     let ctx = ui.ctx().clone();
     let primary = host.is_primary(app);
+    if primary && app.session.active_index() == Some(host.idx) && crate::dialogs::skin_smooth_ui::armed(app) {
+        let windows = craft::ui::runtime::windows::WindowHost::of(&ctx);
+        if windows.injected_holds(windows.current()).contains(&craft::keymap::Key::Space) {
+            // The modal already lets the middle button and Space + primary pan.
+            // A control request can also use the momentary Hand's secondary drag.
+            craft::ui::runtime::sampler::pass_tool_gesture(&ctx, host.canvas_id(), craft::ui::contract::CanvasGesture::press(PointerButton::Secondary));
+        }
+    }
     let mut tools = std::mem::take(&mut app.canvas_tools);
     let tool = app.ui.tool;
     // A tool switch ends the other lassos' outlines between presses; a gesture keeps its tool (`ToolHost`).

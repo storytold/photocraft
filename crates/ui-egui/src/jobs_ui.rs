@@ -962,7 +962,10 @@ pub fn dialog(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let out = BlockingOverlay::new(tl!(&j.label).to_owned()).opened(Bind::bound(&mut open)).card(true).cancel(tl!("Cancel").to_owned()).show(ui, |ui, _| {
         Text::new(tl!(&j.label).to_owned()).role(TypeRole::BodyStrong).show(ui);
         let message = if j.message.is_empty() || j.message == j.label { tl!("Working…").to_owned() } else { j.message.clone() };
-        Text::new(message).shade(Shade::Muted).show(ui);
+        ui.horizontal(|ui| {
+            ui.spinner();
+            Text::new(message).shade(Shade::Muted).show(ui);
+        });
         let bar = match shown_fraction(&j) {
             Some(fraction) => Progress::new(fraction),
             None => Progress::indeterminate(),

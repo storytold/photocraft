@@ -365,6 +365,14 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         let current = app.session.documents().get(idx).map(|state| std::sync::Arc::clone(&state.doc));
         let doc = current.as_ref().unwrap_or(doc);
         let size = PixelSize::new(doc.size.width, doc.size.height);
+        let skin_overlay = if primary && !measuring {
+            let r = space.view.visible();
+            let visible = photocraft_geom::Rect::new(r.x0.floor() as i32, r.y0.floor() as i32, r.x1.ceil() as i32, r.y1.ceil() as i32);
+            ctx.data_mut(|data| data.insert_temp(egui::Id::unique(("plugin-preview-region", doc.id)), visible));
+            crate::dialogs::skin_smooth_ui::overlay(app, ctx, host, doc.id, visible)
+        } else {
+            None
+        };
         // The picture is prepared after the controls, so a gradient's live proposal shows in the pass that made it.
         let picture = gpu_ok
             .then(|| {
@@ -431,6 +439,20 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         // The moving pixels over the document, which hides the layer they come from, and under the controls.
         space.paint_picture(ctx, transform_picture);
         space.paint_picture(ctx, clipping);
+        if let Some((texture, area, uv)) = skin_overlay {
+            let mut mesh = egui::Mesh::with_texture(texture);
+            for (x, y, uv) in [
+                (area.x0, area.y0, uv.min),
+                (area.x1, area.y0, egui::pos2(uv.max.x, uv.min.y)),
+                (area.x1, area.y1, uv.max),
+                (area.x0, area.y1, egui::pos2(uv.min.x, uv.max.y)),
+            ] {
+                let pos = space.view.to_screen(Point::new(f64::from(x), f64::from(y)));
+                mesh.vertices.push(egui::epaint::Vertex { pos, uv, color: egui::Color32::WHITE });
+            }
+            mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+            space.paint_picture(ctx, vec![egui::Shape::mesh(mesh)]);
+        }
         // The grid is drawn over the picture.
         if app.ui.view.shows(app.ui.view.show.pixel_grid) {
             let own = grid_prep.map(|prep| prep.source(app));

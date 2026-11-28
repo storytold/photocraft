@@ -48,6 +48,8 @@ mod fx;
 pub mod health;
 pub mod plan;
 mod prefix;
+#[cfg(not(target_arch = "wasm32"))]
+mod skin_smooth;
 pub mod timing;
 
 use std::collections::HashMap;
@@ -64,6 +66,8 @@ pub use camera_raw::{CAMERA_RAW_SHADER, CameraRawDevelop};
 pub use camera_raw_tone::{CAMERA_RAW_FILTERS_SHADER, CAMERA_RAW_TONE_SHADER};
 pub use health::{DeviceHealth, Fault};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
+#[cfg(not(target_arch = "wasm32"))]
+pub use skin_smooth::{SkinSmooth, SkinSmoothParams};
 pub use timing::{GpuTimer, GpuTiming};
 
 /// GPU compositor. Create once per device; call [`Compositor::render`] per refresh.

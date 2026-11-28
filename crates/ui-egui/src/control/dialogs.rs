@@ -341,6 +341,9 @@ fn command_of(app: &PhotocraftApp, id: DialogId, choice: &str) -> Option<(String
 /// The command a hosted parameter dialog stands for, with its values: the dialog's key, when the key is a command (an
 /// engine command or a shell one such as `file.save`). Automation is judged for it when the dialog is confirmed.
 pub(crate) fn hosted_command(app: &PhotocraftApp, id: DialogId) -> Option<(String, Value)> {
+    if let Some(command) = crate::dialogs::plugin_dialog::command(app, id) {
+        return Some(command);
+    }
     let key = key_of(app, id)?;
     (host(app).get_by_id::<craft::ui::patterns::form_dialogs::HostedParamDialog>(id).is_some() && crate::menus::is_live(&key))
         .then(|| (key, fields_of(app, id)))

@@ -110,6 +110,7 @@ const TABLES: &[Table] = &[
     ("wia_cmds", crate::wia_cmds::specs),
     ("variables_cmds", crate::variables_cmds::specs),
     ("plugin_cmds", crate::plugin_cmds::specs),
+    ("plugin_preset_cmds", crate::cmd::plugin_preset_cmds::specs),
     ("group_view_cmds", crate::group_view_cmds::specs),
     ("fx_view_cmds", crate::fx_view_cmds::specs),
     ("fx_visibility_cmds", crate::fx_visibility_cmds::specs),

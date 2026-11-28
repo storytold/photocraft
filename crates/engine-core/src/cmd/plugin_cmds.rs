@@ -2,8 +2,8 @@
 //!
 //! Plug-ins are installed per process (`plugin.install`, or the Plug-ins preference folder),
 //! listed with `plugin.list` and run with `plugin.run` on the active pixel layer, a targeted
-//! channel, or a smart object (recorded as a smart filter, re-run on re-render while the plug-in
-//! is installed). Runs respect the selection and are one undo step.
+//! channel, or a smart object (recorded as a smart filter that requires the original module).
+//! Runs respect the selection and are one undo step.
 
 use std::sync::Mutex;
 
@@ -18,12 +18,15 @@ use crate::{EngineError, Result, Session};
 /// The smart-filter command id plug-in runs are recorded under.
 pub const RUN: &str = "plugin.run";
 
+pub(crate) const MODULE_HASH: &str = "__pluginHash";
+
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
 
+/// Preserves cancellation as an engine cancellation; other plug-in errors become diagnostic messages.
 fn err(e: photocraft_plugins::Error) -> EngineError {
-    EngineError::Other(e.to_string())
+    if e == photocraft_plugins::Error::Cancelled { EngineError::Cancelled } else { EngineError::Other(e.to_string()) }
 }
 
 fn always(_: &Session) -> std::result::Result<(), String> {
@@ -37,6 +40,8 @@ pub fn describe(p: &Plugin) -> Value {
         "id": m.id, "name": m.name, "version": m.version, "kind": m.kind, "author": m.author, "description": m.description,
         "params": m.params_notation(), "paramsSchema": serde_json::to_value(m).ok().and_then(|v| v.get("params").cloned()),
         "overlap": m.overlap, "area": m.area, "size": p.size(), "source": p.source(),
+        "previewDefault": m.preview_default, "presetValues": m.preset_values,
+        "accelerator": m.accelerator,
     })
 }
 
@@ -62,7 +67,7 @@ fn command_key(k: &str) -> bool {
 /// plug-in's [`photocraft_plugins::Manifest::preview_factor`] (its `"unit": "px"` parameters set
 /// the limit, not the built-in filters' parameter names). `k` when the plug-in isn't installed.
 pub fn preview_factor(p: &Value, k: u32) -> u32 {
-    let Ok(plugin) = plugin_by_id(RUN, p) else { return k };
+    let Ok(plugin) = stored_plugin(p) else { return k };
     match plugin_params(p) {
         Value::Object(params) => plugin.manifest().preview_factor(&params, k),
         // `null` means the defaults (see `Manifest::resolve_params`).
@@ -80,7 +85,7 @@ pub fn scale_for_preview(p: &mut Value, k: u32) {
     if k <= 1 {
         return;
     }
-    let Ok(plugin) = plugin_by_id(RUN, p) else { return };
+    let Ok(plugin) = stored_plugin(p) else { return };
     let nested = p.get("params").is_some();
     let mut params = match plugin_params(p) {
         Value::Object(params) => params,
@@ -102,59 +107,169 @@ fn plugin_by_id(cmd: &str, p: &Value) -> Result<std::sync::Arc<Plugin>> {
     registry::get(id).ok_or_else(|| err(photocraft_plugins::Error::NotFound(id.into())))
 }
 
-fn run(s: &mut Session, p: &Value) -> Result<Value> {
-    let plugin = plugin_by_id(RUN, p)?;
+/// Resolve a recorded filter against the installed module. Older documents have only an ID.
+pub(crate) fn stored_plugin(params: &Value) -> Result<std::sync::Arc<Plugin>> {
+    let plugin = plugin_by_id(RUN, params)?;
+    if let Some(hash) = params.get(MODULE_HASH)
+        && hash.as_str() != Some(plugin.fingerprint())
+    {
+        return Err(bad(RUN, format!("reinstall the original plug-in module for smart filter {:?}", plugin.id())));
+    }
+    Ok(plugin)
+}
+
+/// Identifies filters whose Skin Smooth algorithm interprets ABI pixels as encoded sRGB.
+fn requires_srgb(plugin: &Plugin) -> bool {
+    plugin.id() == "local.skinsmooth.skin-smooth" || plugin.manifest().accelerator == "skinsmooth.v2"
+}
+
+/// ABI v1 carries no ICC profile. Use the host CMS policy for untagged documents,
+/// and reject unsupported or malformed embedded profiles before sampling or filtering.
+pub fn skin_smooth_color_supported(doc: &photocraft_doc::Document) -> std::result::Result<(), &'static str> {
+    use craft_cms::{builtin::Builtin, profile::Profile};
+    use std::sync::Arc;
+    if doc.mode != photocraft_color::ColorMode::Rgb {
+        return Err("Skin Smooth requires an RGB document.");
+    }
+    let bytes = doc.icc_profile.clone().unwrap_or_else(|| crate::color_cmds::document_profile(doc).to_bytes());
+    // One bounded entry: avoid rebuilding CMS comparison transforms every UI frame.
+    type CachedProfile = (Arc<Vec<u8>>, bool);
+    static LAST: Mutex<Option<CachedProfile>> = Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    let supported = match last.as_ref() {
+        Some((previous, supported)) if Arc::ptr_eq(previous, &bytes) => *supported,
+        _ => {
+            let supported = Profile::parse(&bytes).is_ok_and(|p| p.same_colors(Builtin::Srgb.profile()));
+            *last = Some((bytes.clone(), supported));
+            supported
+        }
+    };
+    if supported { Ok(()) } else { Err("Skin Smooth supports sRGB profiles only. Convert the document to sRGB first.") }
+}
+
+/// Check the captured instance: the registry can change while its edit job is waiting.
+pub(crate) fn check_plugin_color(doc: &photocraft_doc::Document, plugin: &Plugin) -> Result<()> {
+    if requires_srgb(plugin) {
+        skin_smooth_color_supported(doc).map_err(|message| bad(RUN, message))?;
+    }
+    Ok(())
+}
+
+/// Validates parameters, then stages a cancellable layer, channel or smart-filter edit as one undo step.
+fn run(s: &mut Session, p: &Value, plugin: std::sync::Arc<Plugin>) -> Result<Value> {
     let params = plugin_params(p);
     // Bad parameters fail before anything is touched.
     let resolved = Value::Object(plugin.manifest().resolve_params(&params).map_err(|e| bad(RUN, e.to_string()))?);
     let layer = crate::commands::layer_param(s, p)?;
     let label = plugin.manifest().name.clone();
     let id = plugin.id().to_string();
-    s.edit(&label, |doc, _| {
-        let selection = doc.selection.clone();
-        let canvas = doc.bounds();
-        if let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, Some(layer), p)? {
-            *surf = plugin.apply(surf, canvas, selection.as_ref(), &resolved).map_err(err)?;
-            return Ok(());
-        }
-        crate::commands::check_pixels_unlocked(doc, layer)?;
-        let keep_alpha = doc.effective_locks(layer).transparency;
-        let l = doc.layer_mut(layer).ok_or(EngineError::NoLayer(layer))?;
-        match &mut l.content {
-            LayerContent::Raster(surf) => {
-                // Lock Transparency: the plug-in may change colour but not alpha (as built-in filters).
-                let before = keep_alpha.then(|| surf.clone());
-                *surf = plugin.apply(surf, canvas, selection.as_ref(), &resolved).map_err(err)?;
-                if let Some(before) = &before {
-                    crate::filters::keep_alpha(before, surf, &|| false)?;
+    let result = json!({"layer": layer.0, "plugin": id});
+    let p = p.clone();
+    crate::jobs::edit_job(
+        s,
+        &label,
+        move |doc, _, ctx| {
+            ctx.check()?;
+            check_plugin_color(doc, &plugin)?;
+            let selection = doc.selection.clone();
+            let canvas = doc.bounds();
+            if let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, Some(layer), &p)? {
+                *surf = ctx.stage(0.0, 1.0, "Filtering", |ctl| plugin.apply_with(surf, canvas, selection.as_ref(), &resolved, ctl)).map_err(err)?;
+                return Ok(());
+            }
+            crate::commands::check_pixels_unlocked(doc, layer)?;
+            let keep_alpha = doc.effective_locks(layer).transparency;
+            let l = doc.layer_mut(layer).ok_or(EngineError::NoLayer(layer))?;
+            match &mut l.content {
+                LayerContent::Raster(surf) => {
+                    // Lock Transparency: the plug-in may change colour but not alpha (as built-in filters).
+                    let before = keep_alpha.then(|| surf.clone());
+                    *surf = ctx.stage(0.0, 0.95, "Filtering", |ctl| plugin.apply_with(surf, canvas, selection.as_ref(), &resolved, ctl)).map_err(err)?;
+                    if let Some(before) = &before {
+                        crate::filters::keep_alpha(before, surf, &|| ctx.cancelled())?;
+                    }
+                    Ok(())
                 }
-                Ok(())
+                LayerContent::Smart(_) => {
+                    let sf = SmartFilter {
+                        command: RUN.into(),
+                        params: json!({"id": id, "params": resolved, (MODULE_HASH): plugin.fingerprint()}),
+                        blend: photocraft_color::BlendMode::Normal,
+                        opacity: 1.0,
+                        visible: true,
+                    };
+                    crate::smart_cmds::add_smart_filter_in(doc, layer, sf, selection.as_ref(), ctx)
+                }
+                other => {
+                    Err(EngineError::Other(format!("plug-in filters need a pixel layer (active layer is {} {} layer)", other.article(), other.kind_name())))
+                }
             }
-            LayerContent::Smart(_) => {
-                let sf = SmartFilter {
-                    command: RUN.into(),
-                    params: json!({"id": id, "params": resolved}),
-                    blend: photocraft_color::BlendMode::Normal,
-                    opacity: 1.0,
-                    visible: true,
-                };
-                crate::smart_cmds::add_smart_filter(doc, layer, sf, selection.as_ref())
-            }
-            other => Err(EngineError::Other(format!("plug-in filters need a pixel layer (active layer is {} {} layer)", other.article(), other.kind_name()))),
-        }
-    })?;
-    Ok(json!({"layer": layer.0, "plugin": id}))
+        },
+        move |()| result,
+    )
 }
 
-/// Smart-filter re-render of a recorded `plugin.run` (see `filters::apply_filter_to_surface`).
-/// `None` when `command` isn't a plug-in run or the plug-in isn't installed (the smart filter is
-/// then skipped, as for other unknown filters) or fails.
-pub(crate) fn apply_to_surface(command: &str, params: &Value, surf: &Surface, selection: Option<&Surface>, canvas: photocraft_geom::Rect) -> Option<Surface> {
-    if command != RUN {
-        return None;
+/// Render a region on a disposable smart-object copy. Only pixels leave this function;
+/// the transient region and new filter never become part of a committed filter stack.
+pub fn preview_smart_region(
+    session: &Session,
+    params: &Value,
+    region: photocraft_geom::Rect,
+    ctx: &crate::jobs::JobCtx,
+) -> Result<Option<(photocraft_doc::LayerId, Surface)>> {
+    ctx.check()?;
+    let layer = crate::commands::layer_param(session, params)?;
+    let mut doc = (*session.active().ok_or(EngineError::NoDocument)?.doc).clone();
+    if !matches!(doc.layer(layer).map(|l| &l.content), Some(LayerContent::Smart(_))) {
+        return Ok(None);
     }
-    let plugin = registry::get(params.get("id")?.as_str()?)?;
-    plugin.apply(surf, canvas, selection, params.get("params").unwrap_or(&Value::Null)).ok()
+    if crate::channel_cmds::channel_surface_for_filter(&mut doc, Some(layer), params)?.is_some() {
+        return Ok(None);
+    }
+    let _acceleration = photocraft_plugins::acceleration::scope(session.effective_plugin_accelerator());
+    let _authorization = crate::jobs::render_authorization_scope(session.authorize);
+    let plugin = plugin_by_id(RUN, params)?;
+    check_plugin_color(&doc, &plugin)?;
+    crate::commands::check_pixels_unlocked(&doc, layer)?;
+    let resolved = plugin.manifest().resolve_params(&plugin_params(params)).map_err(|e| bad(RUN, e.to_string()))?;
+    let selection = doc.selection.clone();
+    let sf = SmartFilter {
+        command: RUN.into(),
+        params: json!({
+            "id": plugin.id(),
+            "params": resolved,
+            (MODULE_HASH): plugin.fingerprint(),
+            "__previewRegion": [region.x0, region.y0, region.x1, region.y1],
+        }),
+        blend: photocraft_color::BlendMode::Normal,
+        opacity: 1.0,
+        visible: true,
+    };
+    crate::smart_cmds::add_smart_filter_in(&mut doc, layer, sf, selection.as_ref(), ctx)?;
+    let Some(LayerContent::Smart(sm)) = doc.layer(layer).map(|l| &l.content) else { return Err(EngineError::NoLayer(layer)) };
+    let surface = sm.cache.clone().ok_or_else(|| EngineError::Other("smart object has no pixels".into()))?;
+    Ok(Some((layer, surface)))
+}
+
+/// Run the module resolved for this stage. The stack owns progress across filters.
+pub(crate) fn apply_to_surface(
+    plugin: &Plugin,
+    params: &Value,
+    surf: &Surface,
+    selection: Option<&Surface>,
+    canvas: photocraft_geom::Rect,
+    ctx: &crate::jobs::JobCtx,
+) -> Result<Surface> {
+    let region_mask = params.get("__previewRegion").filter(|_| selection.is_none()).and_then(|v| serde_json::from_value::<[i32; 4]>(v.clone()).ok()).map(
+        |[x0, y0, x1, y1]| {
+            let mut mask = Surface::new(photocraft_color::PixelFormat::GRAY8);
+            mask.fill_rect(photocraft_geom::Rect::new(x0, y0, x1, y1).intersect(&canvas), &[1.0]);
+            mask
+        },
+    );
+    let cancelled = || ctx.cancelled();
+    let ctl = photocraft_raster::Interrupt::cancel_only(&cancelled);
+    plugin.apply_with(surf, canvas, selection.or(region_mask.as_ref()), params.get("params").unwrap_or(&Value::Null), &ctl).map_err(err)
 }
 
 /// Largest base64 payload `plugin.install` accepts (the module limit, encoded).
@@ -301,7 +416,7 @@ pub fn specs() -> Vec<CommandSpec> {
             shortcut: None,
             params: r##"{"id":text,"params":json} (plug-in parameters under "params" or at the top level; see plugin.list)"##,
             enabled: crate::filters::has_filterable_layer,
-            run,
+            run: |s, p| run(s, p, plugin_by_id(RUN, p)?),
             journal: true,
         },
     ]

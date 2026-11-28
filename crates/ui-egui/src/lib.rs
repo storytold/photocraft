@@ -124,6 +124,8 @@ pub use dialogs::blur_pins;
 pub use dialogs::brush_preset_dialog;
 pub use dialogs::caf_ui;
 use dialogs::camera_raw_gpu;
+#[cfg(not(target_arch = "wasm32"))]
+mod skin_smooth_gpu;
 pub use dialogs::camera_raw_ui;
 pub use dialogs::channel_options_ui;
 pub(crate) use dialogs::color_picker_preview;
@@ -454,6 +456,7 @@ pub struct PhotocraftApp {
     /// Live filter preview (proxy document with the filter applied).
     pub(crate) guide_edit: Option<guide_edit::Draft>,
     pub(crate) filter_preview: Option<filter_dialog::FilterPreview>,
+    pub(crate) skin_smooth_mask: Option<dialogs::skin_smooth_ui::MaskPreview>,
     /// The live preview of the parameter dialogs' own filters, on the dialog lane.
     pub(crate) filter_live: craft::imaging::ui::LivePreview,
     /// The Image › Adjustments dialog that is open: its layer and values (`adjust_dialog`).

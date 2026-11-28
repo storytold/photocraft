@@ -6,6 +6,7 @@ use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, JobCtx, Layer, LayerContent, LayerId, PixelFormat, Rect, Result, SmartFilter, SmartObject,
     SmartSource, Stage, StageKey, Surface, Value, affine_homography, other, placement, stack_cache,
 };
+use photocraft_plugins::Plugin;
 use std::collections::VecDeque;
 use std::sync::{Mutex, Weak};
 
@@ -130,6 +131,10 @@ pub(super) fn blend_surfaces(base: &Surface, top: &Surface, mode: BlendMode, opa
 /// authority denies surfaces its error (the trusted compositor path has no gate installed, so
 /// this reads ambiently only when the caller established one and it refuses).
 pub fn apply_smart_filters(placed: &Surface, sm: &SmartObject, canvas: Rect) -> Result<Surface> {
+    apply_smart_filters_in(placed, sm, canvas, None)
+}
+
+fn apply_smart_filters_in(placed: &Surface, sm: &SmartObject, canvas: Rect, doc: Option<&Document>) -> Result<Surface> {
     if !sm.filters_enabled || !sm.smart_filters.iter().any(|f| f.visible) {
         return Ok(placed.clone());
     }
@@ -137,7 +142,8 @@ pub fn apply_smart_filters(placed: &Surface, sm: &SmartObject, canvas: Rect) -> 
     // Edge pixels repeat at the canvas ∪ placed-content edge, as for layer filters.
     let extent = canvas.union(&placed.content_bounds());
     for f in sm.smart_filters.iter().filter(|f| f.visible) {
-        cur = apply_smart_filter(f, sm, &cur, filter_bounds(f, placed, canvas), extent, &JobCtx::new())?;
+        let plugin = prepare_filter(f, doc)?;
+        cur = apply_smart_filter(f, sm, &cur, filter_bounds(f, placed, canvas), extent, &JobCtx::new(), plugin.as_deref())?;
     }
     Ok(match sm.filter_mask.as_ref().filter(|m| m.enabled) {
         Some(m) => photocraft_compose::filter_mask::mix(placed, &cur, m),
@@ -160,14 +166,25 @@ fn renders_in_object(f: &SmartFilter) -> bool {
     matches!(f.command.as_str(), "filter.render.clouds" | "filter.render.differenceClouds" | "filter.render.fibers" | "filter.render.lensFlare")
 }
 
-/// One visible smart filter over `cur`, blended with its blend mode and opacity. `Err` when the
-/// requesting session's authority denies the filter's params: callers surface the error instead of
-/// rendering (and caching) unfiltered pixels.
-fn apply_smart_filter(f: &SmartFilter, sm: &SmartObject, cur: &Surface, canvas: Rect, extent: Rect, ctx: &JobCtx) -> Result<Surface> {
-    // Equalize bypasses `apply_filter_to_surface_in` (the gate there), so check the command first.
+/// Check the filter before using its cache and capture the module used for this render.
+fn prepare_filter(f: &SmartFilter, doc: Option<&Document>) -> Result<Option<Arc<Plugin>>> {
     crate::jobs::authorize_render_command(&f.command, &f.params)?;
+    if f.command != crate::plugin_cmds::RUN {
+        return Ok(None);
+    }
+    let plugin = crate::plugin_cmds::stored_plugin(&f.params)?;
+    if let Some(doc) = doc {
+        crate::plugin_cmds::check_plugin_color(doc, &plugin)?;
+    }
+    Ok(Some(plugin))
+}
+
+/// One visible smart filter over `cur`, blended with its blend mode and opacity.
+fn apply_smart_filter(f: &SmartFilter, sm: &SmartObject, cur: &Surface, canvas: Rect, extent: Rect, ctx: &JobCtx, plugin: Option<&Plugin>) -> Result<Surface> {
     let params = crate::distort_cmds::placed_puppet_params(&f.command, &f.params, sm);
-    let rendered = if f.command == "image.adjustments.equalize" {
+    let rendered = if let Some(plugin) = plugin {
+        Some(crate::plugin_cmds::apply_to_surface(plugin, &params, cur, None, extent, ctx)?)
+    } else if f.command == "image.adjustments.equalize" {
         ctx.check()?;
         crate::adjust_cmds::adjust_as_filter("equalize", &params, cur, sm.filter_mask.as_ref())?
     } else {
@@ -494,7 +511,7 @@ pub fn render_with_warnings_using(sm: &SmartObject, sources: &mut WarningRenderS
         warnings.extend(omitted);
         Ok(image)
     })?;
-    Ok((Some(apply_smart_filters(&placed, sm, doc.bounds())?), warnings))
+    Ok((Some(apply_smart_filters_in(&placed, sm, doc.bounds(), Some(doc))?), warnings))
 }
 
 /// [`render`], reporting progress per smart filter to `ctx` and stopping between filters once it
@@ -506,9 +523,8 @@ pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Resul
 
 fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapshot: Option<(String, Arc<Vec<u8>>)>) -> Result<Option<Surface>> {
     // A trusted UI render may have populated these stages. Check authority even on a hit.
-    for filter in sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible) {
-        crate::jobs::authorize_render_command(&filter.command, &filter.params)?;
-    }
+    let filters =
+        sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible).map(|f| Ok((f, prepare_filter(f, Some(doc))?))).collect::<Result<Vec<_>>>()?;
     let Some((name, original)) = snapshot.or_else(|| source_bytes(&doc.metadata, &sm.source)) else { return Ok(None) };
     let bytes = display_source(sm, &original);
     let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
@@ -532,14 +548,13 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
         stack_cache::put(placed_key, &stage);
         Ok(stage)
     };
-    let filters: Vec<&SmartFilter> = sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible).collect();
     if filters.is_empty() {
         return Ok(Some(placed()?.surface));
     }
     let keys: Vec<StageKey> = filters
         .iter()
-        .scan(placed_key, |key, f| {
-            *key = stack_cache::filter_key(key, f, sm.filter_mask.as_ref());
+        .scan(placed_key, |key, (f, plugin)| {
+            *key = stack_cache::filter_key(key, f, sm.filter_mask.as_ref(), plugin.as_deref());
             Some(*key)
         })
         .collect();
@@ -552,7 +567,7 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
     // The object's bounds, found once: the placed stage may have been evicted from the cache, and
     // placing it again for every render filter would decode the source each time.
     let mut object_bounds: Option<Rect> = None;
-    for (i, (f, key)) in filters.iter().zip(&keys).enumerate().skip(done) {
+    for (i, ((f, plugin), key)) in filters.iter().zip(&keys).enumerate().skip(done) {
         ctx.check()?;
         ctx.progress(i as f32 / n, "");
         let bounds = match object_bounds {
@@ -560,7 +575,7 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
             Some(b) => b,
             None => *object_bounds.insert(filter_bounds(f, &placed()?.surface, canvas)),
         };
-        cur = Stage { surface: apply_smart_filter(f, sm, &cur.surface, bounds, cur.extent, ctx)?, extent: cur.extent };
+        cur = Stage { surface: apply_smart_filter(f, sm, &cur.surface, bounds, cur.extent, ctx, plugin.as_deref())?, extent: cur.extent };
         stack_cache::put(*key, &cur);
     }
     ctx.progress(1.0, "");

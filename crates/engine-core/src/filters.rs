@@ -226,7 +226,8 @@ pub(crate) fn apply_filter_to_surface_in(
     }
     // WebAssembly plug-in smart filters (plugin_cmds).
     if id == crate::plugin_cmds::RUN {
-        return Ok(crate::plugin_cmds::apply_to_surface(id, params, surf, selection, canvas));
+        let plugin = crate::plugin_cmds::stored_plugin(params)?;
+        return crate::plugin_cmds::apply_to_surface(&plugin, params, surf, selection, canvas, ctx).map(Some);
     }
     let Some(mut fp) = params_for(id, params) else { return Ok(None) };
     // A map that can no longer be read (moved or deleted since) leaves the pixels alone, like an

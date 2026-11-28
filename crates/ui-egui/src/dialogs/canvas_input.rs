@@ -36,6 +36,8 @@ pub(crate) enum DialogPick {
     ParamDropper,
     /// Color Range's sampling.
     ColorRange,
+    /// The Skin Smooth dialog samples the source layer.
+    SkinSmooth,
     /// A drag on the image moves the selected shadow's angle and distance.
     ShadowDrag,
     /// A drag on the image moves the selected Gradient Overlay's offset.
@@ -64,6 +66,9 @@ pub(crate) fn armed(app: &PhotocraftApp) -> Option<DialogPick> {
         }
         // ⌘/Ctrl held on a press: the Curves dialog's own point. The modifier is the pass's state, not an event.
         return (open.kind == "curves" && app.ctx().input(|i| i.modifiers.command)).then_some(DialogPick::CurvesPoint);
+    }
+    if super::skin_smooth_ui::armed(app) {
+        return Some(DialogPick::SkinSmooth);
     }
     if dialogs.get_by_id::<HostedColorRange>(top).is_some() {
         return Some(DialogPick::ColorRange);
@@ -110,7 +115,7 @@ pub(crate) fn disarm_dropper(app: &mut PhotocraftApp) {
 pub(crate) fn follows_drag(app: &PhotocraftApp, pick: DialogPick) -> bool {
     match pick {
         DialogPick::TonePicker(_) => app.framework.dialogs.stack().top().is_some(),
-        DialogPick::Color | DialogPick::ParamDropper | DialogPick::ColorRange => true,
+        DialogPick::Color | DialogPick::ParamDropper | DialogPick::ColorRange | DialogPick::SkinSmooth => true,
         _ => false,
     }
 }
@@ -129,6 +134,9 @@ pub(crate) fn resample(app: &mut PhotocraftApp, pick: DialogPick, at: [f64; 2], 
         }
         DialogPick::ColorRange => {
             pick_color_range(app, at, mods);
+        }
+        DialogPick::SkinSmooth => {
+            pick_skin_smooth(app, at, mods);
         }
         _ => {}
     }
@@ -184,6 +192,11 @@ pub(crate) fn pick_dropper(app: &mut PhotocraftApp, at: [f64; 2], mods: Mods) ->
 /// the select takes no samples or the point is off the document.
 pub(crate) fn pick_color_range(app: &mut PhotocraftApp, at: [f64; 2], mods: Mods) -> bool {
     app.framework.dialogs.get_mut::<HostedColorRange>().is_some_and(|dialog| dialog.sample_canvas(at, mods))
+}
+
+pub(crate) fn pick_skin_smooth(app: &mut PhotocraftApp, at: [f64; 2], mods: Mods) -> bool {
+    super::skin_smooth_ui::pick(app, at, mods);
+    true
 }
 
 /// A drag step with a shadow page selected in Layer Style. `total` is the travel since the press, which the press itself
@@ -243,6 +256,7 @@ pub(crate) fn cursor(app: &PhotocraftApp, pick: DialogPick) -> Cursor {
             let badge = app.framework.dialogs.get::<HostedColorRange>().and_then(|dialog| dialog.tool().with_mods(held(app)).badge());
             pipette(badge)
         }
+        DialogPick::SkinSmooth => pipette(super::skin_smooth_ui::cursor_badge(app, held(app))),
         DialogPick::CurvesPoint => pipette(None),
         DialogPick::ShadowDrag | DialogPick::GradientDrag | DialogPick::PatternPhase => Cursor::System(CursorIcon::Move),
         DialogPick::Locator => Cursor::Painted(PaintedCursor::Locator),

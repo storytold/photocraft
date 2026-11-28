@@ -183,6 +183,7 @@ fn an_unmeasured_compositor_reports_nothing() {
     assert_eq!(comp.take_gpu_timing(), None, "no measurement is reported rather than a wrong one");
 }
 
+/// Forces batched submission through a small residency budget to verify the refresh reports all measured spans.
 #[test]
 fn a_refresh_that_submits_several_times_is_one_measurement() {
     let _lock = crate::GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -206,6 +207,7 @@ fn a_refresh_that_submits_several_times_is_one_measurement() {
     // Each flush closes the span of the command buffer it submits and opens one in the next, so the
     // one measurement holds a span for every command buffer the refresh submitted.
     assert_eq!(t.spans as usize, stats.flushes + 1, "the measurement spans every command buffer of the refresh");
+    assert!(t.ms > 0.0, "the measured command buffers performed GPU work");
     assert!(t.ms <= wall_ms * 1.25, "summed gpu time {:.1} ms exceeds the whole waited-for refresh {wall_ms:.1} ms", t.ms);
 }
 

@@ -100,6 +100,7 @@ pub mod perspective_crop_cmds;
 mod perspective_crop_refuse_tests;
 pub mod photo_cmds;
 pub mod plugin_cmds;
+pub(crate) mod plugin_preset_cmds;
 pub mod preset_import_cmds;
 pub mod print_cmds;
 pub mod render_cmds;

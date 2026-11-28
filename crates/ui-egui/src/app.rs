@@ -112,6 +112,7 @@ impl PhotocraftApp {
             proxy_uploaded: None,
             guide_edit: None,
             filter_preview: None,
+            skin_smooth_mask: None,
             filter_live: craft::imaging::ui::LivePreview::new(craft::imaging::ui::PreviewLane::Dialog),
             adjust_open: None,
             adjust_session: None,

@@ -998,6 +998,10 @@ plugin.install
 plugin.remove
 plugin.reload
 plugin.run
+plugin.preset.list
+plugin.preset.save
+plugin.preset.load
+plugin.preset.remove
 layer.setExpanded
 layer.setEffectsExpanded
 layer.setEffectsVisible

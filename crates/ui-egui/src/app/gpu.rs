@@ -29,6 +29,10 @@ impl PhotocraftApp {
         };
         self.perf.gpu_info.canvas = "gpu".into();
         self.window_device = Some((rs.device.clone(), gpu.health().clone()));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.session.plugin_accelerator = crate::skin_smooth_gpu::create(&rs, gpu.health().clone());
+        }
         self.gpu = Some(gpu);
         self.prefs_rt.gpu_style = None;
     }

@@ -1158,6 +1158,37 @@ fn free_transform_redraws_only_the_moving_layer_when_the_box_opens_and_closes() 
     assert!(damage_since(&app, 0, (rev, key ^ dk), (rev + 2, 0), dk, (rev + 1, Some(moved))).is_none(), "a later revision isn't ours");
 }
 
+/// An embedded window shares ROOT but only the document's own canvas paints the Skin Smooth mask.
+#[test]
+fn embedded_document_window_keeps_skin_smooth_mask_ownership() {
+    use super::document_display::CanvasHost;
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.background_jobs = false;
+    app.run("plugin.install", json!({"path":concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/skin-smooth.wasm")})).unwrap();
+    app.run("file.new", json!({"width":32,"height":24,"background":"#b17d62"})).unwrap();
+    let ctx = app.ctx().clone();
+    let answer = crate::menus::invoke(&mut app, &ctx, "plugin.filter.local.skinsmooth.skin-smooth", json!({})).unwrap();
+    assert!(answer["dialog"].is_string());
+    app.framework.dialogs.get_mut::<crate::dialogs::plugin_dialog::PluginDialog>().unwrap().fields.insert("__skinMask".into(), json!(true));
+
+    let document = app.session.active().unwrap().doc.id;
+    let window = app.ui.document_windows.new_window_for(&document, egui::Rect::EVERYTHING);
+    let view = app.ui.views[0].clone();
+    let host = CanvasHost { idx: 0, window: Some(window) };
+    app.ui.window_views.insert(window, view.clone());
+    for owns in [false, true] {
+        if owns {
+            app.ui.window_views.remove(&window);
+        }
+        assert_eq!(host.is_primary(&app), owns);
+        crate::testing::run_ui(&ctx, Default::default(), |ui| {
+            super::document_windows::document_window_canvas(&mut app, ui, window, 0, view.clone(), true);
+        });
+        assert_eq!(app.skin_smooth_mask.is_some(), owns);
+    }
+}
+
 mod gpu_tests {
     use super::*;
 

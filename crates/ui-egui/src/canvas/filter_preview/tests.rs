@@ -665,6 +665,192 @@ fn a_reopened_dialog_never_paints_the_previous_dialogs_preview() {
     });
 }
 
+#[test]
+fn inline_plugin_preview_never_refilters_on_pan() {
+    for cooperative in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.background_jobs = false;
+        app.session.set_cooperative_jobs(cooperative);
+        app.run("file.new", json!({"width":2048,"height":128,"background":"#204060"})).unwrap();
+        app.run("plugin.install", json!({"path":concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm")})).unwrap();
+        crate::filter_dialog::open_with_spec(
+            &mut app,
+            "plugin.run",
+            "Invert",
+            "{}",
+            json!({"id":"org.photocraft.example.invert","__preview":true}).as_object().unwrap().clone(),
+        );
+        let ctx = app.ctx().clone();
+        let doc = app.session.active().unwrap().doc.clone();
+        let set_region = |r| ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("plugin-preview-region", doc.id)), r));
+        set_region(photocraft_geom::Rect::new(200, 0, 300, 128));
+        ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+        let first = app.filter_preview.as_ref().unwrap().result.clone().unwrap();
+        assert!(app.filter_preview.as_ref().unwrap().key.params.get("__previewRegion").is_none());
+        for x in [230, 1024, 1800, 260, 200] {
+            set_region(photocraft_geom::Rect::new(x, 0, x + 100, 128));
+            ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+            assert!(
+                std::sync::Arc::ptr_eq(&first, app.filter_preview.as_ref().unwrap().result.as_ref().unwrap()),
+                "panning must not run a synchronous plug-in in cooperative/web sessions"
+            );
+        }
+        app.framework.dialogs.get_mut::<crate::dialogs::plugin_dialog::PluginDialog>().unwrap().fields.insert("amount".into(), json!(0.5));
+        ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+        assert!(!std::sync::Arc::ptr_eq(&first, app.filter_preview.as_ref().unwrap().result.as_ref().unwrap()), "changed parameters invalidate reuse");
+        app.ui.view.pattern_preview = true;
+        set_region(photocraft_geom::Rect::new(3000, 0, 3100, 128));
+        ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+        let preview = app.filter_preview.as_ref().unwrap();
+        assert!(preview.key.params.get("__previewRegion").is_none());
+        assert_ne!(preview.result.as_ref().unwrap().layers[0].surface().unwrap().pixel(1, 1), doc.layers[0].surface().unwrap().pixel(1, 1));
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_failed_plugin_preview_does_not_retain_its_large_region() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.background_jobs = true;
+    app.run("file.new", json!({"width":2048,"height":1024,"background":"#204060"})).unwrap();
+    app.run("plugin.install", json!({"path":concat!(env!("CARGO_MANIFEST_DIR"),"/../plugins/tests/fixtures/invert.wasm")})).unwrap();
+    crate::filter_dialog::open_with_spec(
+        &mut app,
+        "plugin.run",
+        "Invert",
+        "{}",
+        json!({"id":"org.photocraft.example.invert","__preview":true}).as_object().unwrap().clone(),
+    );
+    let ctx = app.ctx().clone();
+    let doc = app.session.active().unwrap().doc.id;
+    let region = egui::Id::unique(("plugin-preview-region", doc));
+    ctx.data_mut(|d| d.insert_temp(region, photocraft_geom::Rect::new(0, 0, 2048, 1024)));
+    drive_until(&mut app, &ctx, "the large preview", |app| app.filter_preview.as_ref().is_some_and(|p| p.result.is_some()));
+    app.filter_preview.as_mut().unwrap().result = None;
+    ctx.data_mut(|d| d.insert_temp(region, photocraft_geom::Rect::new(0, 0, 128, 128)));
+    app.framework.dialogs.get_mut::<crate::dialogs::plugin_dialog::PluginDialog>().unwrap().fields.insert("amount".into(), json!(0.5));
+    drive_until(&mut app, &ctx, "the smaller preview", |app| app.filter_preview.as_ref().is_some_and(|p| p.result.is_some()));
+    assert_eq!(app.filter_preview.as_ref().unwrap().key.params["__previewRegion"], json!([0, 0, 512, 512]));
+}
+
+/// Canvas-produced document regions must cover the visible proxy pixels before and after panning.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn panned_plugin_preview_matches_full_preview_at_factor_four() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.background_jobs = true;
+    app.run("file.new", json!({"width": 6000, "height": 4000, "background": "#204060"})).unwrap();
+    app.session
+        .edit("pattern", |doc, active| {
+            let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            surface.fill_rect(photocraft_geom::Rect::new(1600, 1000, 2000, 1400), &[0.2, 0.7, 0.3, 1.0]);
+            surface.fill_rect(photocraft_geom::Rect::new(4000, 2400, 4400, 3000), &[0.8, 0.2, 0.4, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.run("plugin.install", json!({"path": concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm")})).unwrap();
+    crate::filter_dialog::open_with_spec(
+        &mut app,
+        "plugin.run",
+        "Invert",
+        "{}",
+        json!({"id": "org.photocraft.example.invert", "__preview": true}).as_object().unwrap().clone(),
+    );
+    app.ui.extras.rulers = false;
+    app.ui.extras.snap = false;
+    app.ui.views[0].clear_pending();
+    let original = app.session.active().unwrap().doc.clone();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let full = crate::filter_dialog::preview_document(&original, Some(layer), "plugin.run", &json!({"id": "org.photocraft.example.invert"}), 4).unwrap();
+    let expected = full.layer(layer).unwrap().surface().unwrap();
+    let proxy = crate::proxy::proxy_document(&original, 4);
+    let ctx = app.ctx().clone();
+    crate::canvas::testing::window(&mut app, egui::vec2(850.0, 650.0));
+    crate::canvas::testing::shown(&mut app);
+    let region_id = egui::Id::unique(("plugin-preview-region", original.id));
+    let mut previous = app.filter_preview.as_ref().map_or(Value::Null, |p| p.key.params["__previewRegion"].clone());
+    for center in [[1800.0, 1200.0], [4200.0, 2700.0]] {
+        let view = &mut app.ui.views[0];
+        view.zoom = 0.25;
+        view.center = center;
+        view.clear_pending();
+        crate::canvas::testing::frame(&mut app);
+        let visible: photocraft_geom::Rect = ctx.data(|data| data.get_temp(region_id)).expect("the shown canvas reports its document region");
+        let visible = visible.intersect(&original.bounds());
+        assert!(visible.contains(center[0] as i32, center[1] as i32), "the visible region follows the pan: {visible:?}");
+        drive_until(&mut app, &ctx, "the panned region", |app| {
+            app.filter_preview.as_ref().is_some_and(|p| p.key.params["__previewRegion"] != previous && p.result.is_some())
+        });
+        let preview = app.filter_preview.as_ref().unwrap();
+        assert_eq!(preview.key.k, 4);
+        previous = preview.key.params["__previewRegion"].clone();
+        let [x0, y0, x1, y1]: [i32; 4] = serde_json::from_value(previous.clone()).unwrap();
+        let region = photocraft_geom::Rect::new(x0, y0, x1, y1);
+        assert_eq!(region.intersect(&visible), visible);
+        let visible = photocraft_geom::Rect::new(visible.x0 / 4, visible.y0 / 4, (visible.x1 + 3) / 4, (visible.y1 + 3) / 4);
+        let result = preview.result.as_ref().unwrap().layer(layer).unwrap().surface().unwrap();
+        assert_ne!(expected.pixel(visible.x0, visible.y0), proxy.layer(layer).unwrap().surface().unwrap().pixel(visible.x0, visible.y0));
+        for y in visible.y0..visible.y1 {
+            for x in visible.x0..visible.x1 {
+                assert_eq!(result.pixel(x, y), expected.pixel(x, y), "visible proxy pixel {x},{y} at {center:?}");
+            }
+        }
+    }
+    assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc), "previewing never edits the document");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn returning_to_a_cancelled_regional_preview_retries_without_blanking() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width":64,"height":48,"background":"#204060"})).unwrap();
+    app.run("plugin.install", json!({"path":concat!(env!("CARGO_MANIFEST_DIR"),"/../plugins/tests/fixtures/invert.wasm")})).unwrap();
+    crate::filter_dialog::open_with_spec(
+        &mut app,
+        "plugin.run",
+        "Invert",
+        "{}",
+        json!({"id":"org.photocraft.example.invert","__preview":true}).as_object().unwrap().clone(),
+    );
+    app.background_jobs = true;
+    let ctx = app.ctx().clone();
+    let doc = app.session.active().unwrap().doc.id;
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("plugin-preview-region", doc)), photocraft_geom::Rect::new(0, 0, 32, 24)));
+    drive_until(&mut app, &ctx, "the initial preview", |a| a.filter_preview.as_ref().is_some_and(|p| p.result.is_some()));
+    let first = app.filter_preview.as_ref().unwrap().key.clone();
+    assert!(first.params.get("__previewRegion").is_some());
+    let mut moved = first.clone();
+    moved.params["__previewRegion"] = json!([10, 5, 32, 24]);
+
+    for keep_frame in [true, false] {
+        if !keep_frame {
+            app.filter_preview = None;
+        }
+        let before = app.filter_preview.as_ref().and_then(|p| p.result.clone());
+        let (release, wait) = std::sync::mpsc::channel();
+        app.filter_preview_worker
+            .start(first.clone(), ctx.clone(), move |job| {
+                wait.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+                assert!(job.cancelled(), "the newer request cancelled A before it finished");
+                crate::dialogs::filter_preview_worker::Computed { result: None, ms: 0.0 }
+            })
+            .unwrap();
+        app.filter_preview_worker.supersede(&moved, 0.0);
+        app.filter_preview_worker.supersede(&moved, crate::dialogs::filter_preview_worker::SETTLE_MS);
+        release.send(()).unwrap();
+
+        // The UI still wants A when it sees the cancelled completion. The worker must be
+        // drained, but the empty result must neither clear a good frame nor prevent a retry.
+        drive_until(&mut app, &ctx, "the cancelled preview and any retry", |a| !a.filter_preview_worker.busy() && a.filter_preview.is_some());
+        let after = app.filter_preview.as_ref().unwrap();
+        assert_eq!(after.key, first);
+        let frame = after.result.as_ref().expect("a cancelled computation must not leave the canvas without a preview");
+        if let Some(before) = before {
+            assert!(std::sync::Arc::ptr_eq(&before, frame), "the already displayed frame must survive");
+        }
+    }
+}
+
 /// A preview belongs to what the command addresses: another document, layer or mask in the parameters is another
 /// session, while a slider on the same target keeps the session's last frame.
 #[test]

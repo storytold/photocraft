@@ -29,6 +29,12 @@ pub(crate) struct DialogTools {
     phase: Option<PhaseDrag>,
 }
 
+impl DialogTools {
+    pub(crate) fn dragging_skin_sampler(&self) -> bool {
+        self.pick == Some(DialogPick::SkinSmooth)
+    }
+}
+
 /// The pointer's document point: the one mapping from screen points to document units for the canvas tools of
 /// this area.
 // PLAN: assumed `CanvasView::to_doc(Pos2) -> kurbo::Point` as listed in the framework definitions.
@@ -58,7 +64,7 @@ pub(crate) fn end_if_disarmed(app: &crate::PhotocraftApp, state: &mut DialogTool
 
 /// Whether the pick samples a colour from the image, so the precise cursor (Caps Lock) shows a crosshair.
 fn samples(pick: DialogPick) -> bool {
-    matches!(pick, DialogPick::TonePicker(_) | DialogPick::Color | DialogPick::ParamDropper | DialogPick::ColorRange)
+    matches!(pick, DialogPick::TonePicker(_) | DialogPick::Color | DialogPick::ParamDropper | DialogPick::ColorRange | DialogPick::SkinSmooth)
 }
 
 struct DialogTool<'a> {
@@ -81,6 +87,7 @@ impl CanvasTool for DialogTool<'_> {
                 DialogPick::Color => (canvas_input::pick_color(app, at), !follows),
                 DialogPick::ParamDropper => (canvas_input::pick_dropper(app, at, mods), !follows),
                 DialogPick::ColorRange => (canvas_input::pick_color_range(app, at, mods), !follows),
+                DialogPick::SkinSmooth => (canvas_input::pick_skin_smooth(app, at, mods), !follows),
                 // A drag after the locator's press does nothing (#9648).
                 DialogPick::Locator => (canvas_input::locate(app, at), true),
                 DialogPick::ShadowDrag => (canvas_input::drag_shadow(app, at, [0.0, 0.0]), false),
@@ -157,10 +164,9 @@ impl CanvasTool for DialogTool<'_> {
         false
     }
 
-    /// The drags that move content (the pattern's phase, a shadow's offset, a gradient's offset) follow every move from
-    /// the press, so a move of a pixel or two moves it, as production's dialog drags; none of them reads a click.
+    /// Content drags and the Skin Smooth sampler follow every move from the press, including small moves.
     fn takes_every_move(&self) -> bool {
-        self.state.press.is_some() && matches!(self.pick, DialogPick::PatternPhase | DialogPick::ShadowDrag | DialogPick::GradientDrag)
+        self.state.press.is_some() && matches!(self.pick, DialogPick::PatternPhase | DialogPick::ShadowDrag | DialogPick::GradientDrag | DialogPick::SkinSmooth)
     }
 
     fn paint(&self, _draw: &Draw<'_>, _cx: &ToolContext<'_>) {}
