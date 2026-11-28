@@ -1,6 +1,6 @@
 //! Brush engine: Photoshop-grade brushes (computed and sampled tips, Shape Dynamics, Scattering,
 //! Texture, Dual Brush, Color Dynamics, Transfer, Brush Pose, Noise, Wet Edges, Build-up,
-//! Smoothing) plus the dab machinery shared by the retouching tools.
+//! Smoothing, Smooth Curves) plus the dab machinery shared by the retouching tools.
 //!
 //! Strokes are data ([`Stroke`]) so they can be recorded, replayed by automation, and tested
 //! deterministically: every jitter is a hash of the brush seed and the dab index ([`rng`]).
@@ -32,6 +32,7 @@ pub mod render;
 pub mod replace;
 pub mod retouch;
 pub mod rng;
+pub mod stroke_curve;
 pub mod symmetry;
 pub mod tile;
 
