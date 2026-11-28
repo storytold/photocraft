@@ -235,6 +235,7 @@ fn label_override(key: &str) -> Option<&'static str> {
         "lowLatencyDrawing" => "Low-Latency Drawing (vsync off, applies at next launch)",
         "sizeLimitMb" => "Scratch Size Limit (MB, 0 = No Limit)",
         "gpuMemoryMb" => "GPU Memory (MB, 0 = Automatic)",
+        "wheelActionCtrl" => "Ctrl/Cmd + Scroll Wheel",
         _ => return None,
     })
 }
@@ -252,6 +253,8 @@ pub(super) fn choice_label(v: &str) -> String {
         "16" => "16 Bits/Channel".into(),
         "postScript" => "PostScript (72 points/inch)".into(),
         "traditional" => "Traditional (72.27 points/inch)".into(),
+        "photoshop" => "Default (as in Photoshop)".into(),
+        "zoomContinuous" => "Zoom".into(),
         "vulkan" => "Vulkan".into(),
         "dx12" => "DirectX 12".into(),
         "metal" => "Metal".into(),

@@ -64,6 +64,7 @@ pub mod theme;
 pub mod tone;
 pub(crate) mod tool_memory;
 pub mod updates_ui;
+mod wheel_nav;
 
 use std::collections::HashMap;
 

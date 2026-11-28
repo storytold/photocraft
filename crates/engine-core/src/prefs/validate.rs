@@ -3,7 +3,7 @@ use super::{
     AppearanceMode, Ask, CanvasBorder, CanvasColor, CheckerColors, CheckerSize, ColorPicker, ExportLocation, ExportMetadata, FontPreview, GpuBackend,
     Interpolation, LineStyle, LinuxDisplayServer, LogDestination, LogDetail, OtherCursor, PaintingCursor, PlaybackPerformance, PointSize, PressureCurve,
     QuickExportFormat, RawColorSpace, RawDemosaic, RawDepth, RawSharpen, RenderingMode, RightClickPaint, TabletInput, TextEngine, TypeUnit, UiDensity,
-    UiFontSize, UiScale, Unit, Value, WhenAppClosed,
+    UiFontSize, UiScale, Unit, Value, WheelAction, WhenAppClosed,
 };
 
 /// Preferences dialog sections in Photoshop's order: (id, title).
@@ -68,6 +68,7 @@ pub fn gpu_adapter_matches(name: &str, wanted: &str) -> bool {
 pub fn choices(path: &str) -> Option<&'static [&'static str]> {
     Some(match path {
         "general.colorPicker" => ColorPicker::NAMES,
+        "general.wheelActionCtrl" => WheelAction::NAMES,
         "general.imageInterpolation" => Interpolation::NAMES,
         "interface.appearanceMode" => AppearanceMode::NAMES,
         "interface.density" => UiDensity::NAMES,
