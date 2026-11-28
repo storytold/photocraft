@@ -60,6 +60,71 @@ pub(crate) fn put_tiles(device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mu
     bytes.len() as u64
 }
 
+/// Stage one bounded conversion batch, then copy each distinct tile to its coordinates. A single
+/// `Queue::write_texture` per tile made the CPU spend most of a large first composite preparing
+/// thousands of tiny uploads; one buffer write per conversion batch keeps the same texels and
+/// preserves copy order inside the cell encoder. Narrow mask formats get zero-padded rows to meet
+/// the buffer-to-texture copy alignment requirement.
+pub(crate) fn put_tile_batch(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    r: &Resident,
+    groups: &[(&[TileCoord], &[u8])],
+) -> u64 {
+    let tile_size = TILE_SIZE as usize;
+    let bpp = r.kind.bytes_per_pixel();
+    let row = tile_size * bpp;
+    let alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+    let bytes_per_row = row.div_ceil(alignment) * alignment;
+    let tile_stride = bytes_per_row * tile_size;
+    let staged = groups.len() * tile_stride;
+    if staged == 0 {
+        return 0;
+    }
+    let mut data = Vec::with_capacity(staged);
+    for (_, bytes) in groups {
+        debug_assert_eq!(bytes.len(), row * tile_size);
+        if bytes_per_row == row {
+            data.extend_from_slice(bytes);
+        } else {
+            for source_row in bytes.chunks_exact(row) {
+                data.extend_from_slice(source_row);
+                data.resize(data.len() + bytes_per_row - row, 0);
+            }
+        }
+    }
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("pc_tile_upload_batch"),
+        size: staged as u64,
+        usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&buffer, 0, &data);
+    let extent = wgpu::Extent3d { width: TILE_SIZE as u32, height: TILE_SIZE as u32, depth_or_array_layers: 1 };
+    let mut offset = 0;
+    for (coords, _) in groups {
+        for c in *coords {
+            let tr = c.rect();
+            encoder.copy_buffer_to_texture(
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout { offset, bytes_per_row: Some(bytes_per_row as u32), rows_per_image: Some(TILE_SIZE as u32) },
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &r.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: (tr.x0 - r.region.x0) as u32, y: (tr.y0 - r.region.y0) as u32, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                extent,
+            );
+        }
+        offset += tile_stride as u64;
+    }
+    staged as u64
+}
+
 /// Copy the texels `old` holds inside the region of its replacement `new` (same texel kind,
 /// format and default pixel; only the region moved) and carry over the tiles they show, so only
 /// tiles outside the overlap or changed since need uploading. Returns the kept (tile-aligned)
@@ -94,16 +159,16 @@ pub(crate) fn keep_overlap(device: &wgpu::Device, queue: &wgpu::Queue, old: &Res
     k
 }
 
-/// Convert `tiles` of `surface` to `kind` texels and hand each distinct tile, the coordinates
-/// sharing it and its bytes to `put`. Each distinct tile is converted once (a solid fill shares
-/// one `Arc` across every coordinate it covers), in parallel batches. Converting every tile one
+/// Convert `tiles` of `surface` to `kind` texels and hand each distinct conversion batch, with
+/// coordinates sharing each tile and its bytes, to `put`. Each distinct tile is converted once
+/// (a solid fill shares one `Arc` across every coordinate it covers), in parallel batches. Converting every tile one
 /// after another on the UI thread froze a 50 MP 16-bit document for about 1.4 s after a
 /// full-canvas fill (#1774). Returns how many tiles were converted.
 pub(crate) fn convert_tiles(
     surface: &Surface,
     tiles: Vec<(TileCoord, Arc<Tile>)>,
     kind: TexKind,
-    mut put: impl FnMut(&Arc<Tile>, &[TileCoord], &[u8]),
+    mut put: impl FnMut(&[(Arc<Tile>, Vec<TileCoord>)], &[Vec<u8>]),
 ) -> usize {
     let mut groups: Vec<(Arc<Tile>, Vec<TileCoord>)> = Vec::new();
     let mut index: HashMap<*const Tile, usize> = HashMap::new();
@@ -135,15 +200,25 @@ pub(crate) fn convert_tiles(
                 convert_rows(surface, Some(t), kind, Rect::new(r.x0, y0, r.x1, y0 + MANAGED_BAND_ROWS))
             })
         });
-        for ((t, cs), bytes) in batch.iter().zip(parts.chunks(bands as usize)) {
-            // One part (every format but CMYK and Lab) goes through as is: no copy per tile.
-            match bytes {
-                [one] => put(t, cs, one),
-                _ => put(t, cs, &bytes.concat()),
+        // One part (every format but CMYK and Lab) goes through as is: no copy per tile.
+        let converted = if bands == 1 {
+            parts
+        } else {
+            let mut parts = parts.into_iter();
+            let mut converted = Vec::with_capacity(batch.len());
+            for _ in batch {
+                let mut bytes = Vec::new();
+                for part in parts.by_ref().take(bands as usize) {
+                    bytes.extend_from_slice(&part);
+                    scratch::give(part);
+                }
+                converted.push(bytes);
             }
-        }
+            converted
+        };
+        put(batch, &converted);
         // The texels are on their way to the GPU: the buffers serve the next batch.
-        parts.into_iter().for_each(scratch::give);
+        converted.into_iter().for_each(scratch::give);
     }
     groups.len()
 }
