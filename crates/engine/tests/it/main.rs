@@ -101,6 +101,7 @@ mod memory_prefs;
 mod merge_transparent_bounds;
 mod missing_layer_error;
 mod multi_channel_editing;
+mod new_document_profile;
 mod nonfinite_style;
 mod open_identity;
 mod paint_in_actions_cmds;

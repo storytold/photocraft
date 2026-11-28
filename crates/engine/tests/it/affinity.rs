@@ -9,9 +9,10 @@ use photocraft_engine::file_cmds::open_bytes_as;
 use photocraft_engine::jobs::{OpenSource, Started};
 use serde_json::json;
 
+/// A bare PNG thumbnail: the Affinity preview reader deliberately rejects compressed metadata.
 fn fixture() -> Vec<u8> {
     let mut src = Session::new();
-    src.execute("file.new", json!({"width": 2, "height": 1, "background": "#dc283c"})).unwrap();
+    src.execute("file.new", json!({"width": 2, "height": 1, "background": "#dc283c", "profile": "none"})).unwrap();
     // Affinity's previews carry no colour profile.
     let mut opts = photocraft_io::ExportOptions::default();
     opts.encode.embed_icc = false;
