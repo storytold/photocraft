@@ -801,11 +801,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     }
     // An icon entry's label is its tooltip and accessible name.
     let entries: Vec<Entry<String>> = [
-        ("square", "rectangle", tl!("Create a new rectangular frame")),
-        ("circle", "ellipse", tl!("Create a new elliptical frame")),
-        ("triangle", "triangle", tl!("Create a new triangular frame")),
-        ("pentagon", "polygon", tl!("Create a new polygonal frame")),
-        ("shapes", "custom", tl!("Create a new custom frame")),
+        ("square", "rectangle", tl!("Use the mouse to create a new rectangular Frame")),
+        ("circle", "ellipse", tl!("Use the mouse to create a new elliptical Frame")),
+        ("triangle", "triangle", tl!("Use the mouse to create a new triangular Frame")),
+        ("pentagon", "polygon", tl!("Use the mouse to create a new polygonal Frame")),
+        ("shapes", "custom", tl!("Use the mouse to create a new custom Frame")),
     ]
     .into_iter()
     .map(|(icon, shape, label)| Entry::new(shape.to_string(), label).icon(IconId::new(icon)))
@@ -819,7 +819,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     }
     if app.ui.frame_tool.shape == "polygon" {
         let mut sides = Some(f64::from(app.ui.frame_tool.sides.clamp(3, 100)));
-        NumberField::new("Sides", Bind::bound(&mut sides)).range(3.0..=100.0).show(ui);
+        NumberField::new("#", Bind::bound(&mut sides)).range(3.0..=100.0).show(ui);
         if let Some(n) = sides {
             app.ui.frame_tool.sides = (n.round() as u32).clamp(3, 100);
         }
@@ -843,6 +843,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
 mod cursor_tests;
 #[cfg(test)]
 mod escape_commit_tests;
+#[cfg(test)]
+mod labels_tests;
 #[cfg(test)]
 mod move_history_tests;
 #[cfg(test)]
