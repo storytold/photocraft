@@ -211,6 +211,55 @@ fn a_kept_txt2_goes_with_the_last_type_layer() {
     assert!(file.global_blocks.iter().any(|b| b.key == *b"Txt2"), "a type layer keeps its Txt2");
 }
 
+/// A type layer is written with the name source (`lnsr`) the engine reads back, between `luni`
+/// and `lyid` as Photoshop writes it: a kept `rend` becomes `layr` once the layer is renamed, a
+/// kept `layr` stays, a PSD layer without one gets `layr`, and a layer made here `rend` while
+/// its name is its text's (a duplicate's "Title copy" included). Other layers keep their own
+/// block as it was.
+#[test]
+fn type_layers_are_written_with_the_name_source_the_engine_reads() {
+    let mut doc = Document::new("t", photocraft_geom::Size::new(8, 6), ColorMode::Rgb, SampleType::U8);
+    let text = |s: &str| LayerContent::Text(photocraft_doc::TextLayer { text: s.into(), ..Default::default() });
+    // Name, text, the `lnsr` read from the file, whether the layer came from a PSD, and the
+    // `lnsr` written.
+    type Case = (&'static str, &'static str, Option<&'static [u8; 4]>, bool, &'static [u8; 4]);
+    let cases: [Case; 8] = [
+        ("Renamed", "Title", Some(b"rend"), true, b"layr"),
+        ("Title", "Title", Some(b"rend"), true, b"rend"),
+        ("name", "name", Some(b"layr"), true, b"layr"),
+        ("name", "name", None, true, b"layr"),
+        ("Title", "Title", None, false, b"rend"),
+        ("Byline", "Caption", None, false, b"layr"),
+        // A duplicate's name is its text's too, as the engine renames it.
+        ("Title copy", "Title", None, false, b"rend"),
+        ("Title copy 2", "Title", Some(b"rend"), true, b"rend"),
+    ];
+    for (i, (name, s, src, from_psd, _)) in cases.iter().enumerate() {
+        let mut l = Layer::new(*name, text(s));
+        l.psd_id = from_psd.then_some(u32::try_from(i).unwrap() + 1);
+        l.psd_blocks.extend(src.map(|src| (*b"lnsr", std::sync::Arc::new(src.to_vec()))));
+        doc.layers.push(l);
+    }
+    let mut pixels = Layer::new("Layer 1", LayerContent::Raster(Surface::new(doc.pixel_format())));
+    pixels.psd_blocks.push((*b"lnsr", std::sync::Arc::new(b"cont".to_vec())));
+    doc.layers.push(pixels);
+    let bytes = document_to_psd(&doc).unwrap().to_bytes().unwrap();
+    // The bytes Photoshop writes for a type layer named after its text.
+    assert!(bytes.windows(24).any(|w| w == b"8BIMlnsr\0\0\0\x04rend8BIMlyid"), "8BIM, lnsr, length 4, rend, then lyid");
+    let file = PsdFile::from_bytes(&bytes).unwrap();
+    let records = file.layers();
+    assert_eq!(records.len(), cases.len() + 1);
+    for (r, (name, s, src, from_psd, want)) in records.iter().zip(&cases) {
+        let case = format!("{name:?} reading {s:?}, kept {:?}, from a PSD {from_psd}", src.map(|s| String::from_utf8_lossy(s)));
+        let lnsr: Vec<String> = r.blocks.iter().filter(|b| b.key == *b"lnsr").map(|b| String::from_utf8_lossy(&b.data).into_owned()).collect();
+        assert_eq!(lnsr, [String::from_utf8_lossy(&want[..])], "{case}");
+        let keys: Vec<String> = r.blocks.iter().take(3).map(|b| String::from_utf8_lossy(&b.key).into_owned()).collect();
+        assert_eq!(keys, ["luni", "lnsr", "lyid"], "{case}");
+    }
+    let lnsr: Vec<&[u8]> = records[cases.len()].blocks.iter().filter(|b| b.key == *b"lnsr").map(|b| b.data.as_slice()).collect();
+    assert_eq!(lnsr, [&b"cont"[..]], "a pixel layer's own block is kept");
+}
+
 /// A merged-transparency marker kept from the opened file describes that file's composite.
 /// Saved with an opaque composite, it would make the first alpha channel read back as the
 /// merged transparency, and the channel would be gone: the save drops it.
