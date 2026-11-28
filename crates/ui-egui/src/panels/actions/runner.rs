@@ -200,7 +200,10 @@ pub(crate) fn open_recorded_editor(app: &mut PhotocraftApp, id: &str, params: &V
         Err(Some(reason)) => return Err(reason),
         Err(None) => {}
     }
-    let dialog = open_step_editor(app, id, &values)?;
+    let dialog = match crate::filter_dialog::open_light_list_step(app, id, &values) {
+        Some(dialog) => dialog?,
+        None => open_step_editor(app, id, &values)?,
+    };
     if !crate::sizing::is_sizing(id) {
         fill_editor(app, dialog, &values);
     }

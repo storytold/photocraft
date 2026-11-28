@@ -229,6 +229,11 @@ pub(super) fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
                 f.params = photocraft_io::smart_map::displace_without_map(&f.params);
             }
         }
+        // A Relight light list is checked here too: a malformed light would otherwise be stored
+        // and silently dropped on every re-render.
+        if f.command == "filter.render.relight" {
+            crate::filters_ext::validate_relight_lights(&f.params)?;
+        }
         // As applying it does: the re-render can't read the document's alpha channels.
         if f.command == "filter.blur.lensBlur" && f.params.get("depthMap").and_then(Value::as_str) == Some("channel") {
             return Err(EngineError::Other(crate::filters::LENS_BLUR_CHANNEL_ON_SMART.into()));

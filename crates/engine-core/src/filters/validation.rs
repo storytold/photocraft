@@ -39,9 +39,15 @@ pub(crate) fn validate_params(id: &str, params: &Value) -> Result<()> {
     }
     let map = params.as_object().ok_or_else(|| bad("params must be a JSON object".into()))?;
     crate::param_check::check(spec, params)?;
+    // Explicit lights replace the legacy single-light fields, but not the shared fields.
+    let explicit_relight = id == "filter.render.relight" && map.contains_key("lights");
+    if explicit_relight {
+        crate::filters_ext::validate_relight_lights(params)?;
+    }
     let Some(schema) = crate::param_schema::of(spec) else { return Ok(()) };
     for (key, value) in map {
         let (valid, expected) = match (schema.param(key), key.as_str()) {
+            (Some(_), "angle" | "elevation" | "intensity" | "warmth") if explicit_relight => continue,
             (Some(p), _) if DIALOG_RANGES.contains(&(id, key.as_str())) => (value.is_number() || (value.is_null() && p.optional()), "a number".into()),
             (Some(_), "shapeId" | "shapeName") if id == "filter.blur.shapeBlur" => (value.as_str().is_some_and(|s| !s.is_empty()), "a nonempty string".into()),
             (Some(_), "shapePath") if id == "filter.blur.shapeBlur" => {
