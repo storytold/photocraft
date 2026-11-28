@@ -878,6 +878,9 @@ pub fn subsample<T: Copy>(v: &[T], max: usize) -> Vec<T> {
 }
 
 #[cfg(test)]
+mod quick_disc_size_tests;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
