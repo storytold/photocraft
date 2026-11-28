@@ -194,6 +194,45 @@ impl StyleWarp {
         Some(StyleWarp { grid, o: (x0, y0), size: (2.0 * hw, 2.0 * hh) })
     }
 
+    /// The box (px) of the style's stored envelope: its control points with each direction at
+    /// the lowest degree that draws the same surface (an Arc is quadratic across and straight
+    /// down, a Flag cubic across), the net the reference application stores for a preset. Its
+    /// box can reach far past the warp's own box (an Arc's corners swing out), and it is the box
+    /// a placed layer's corners frame.
+    pub fn envelope_bounds(&self) -> [f64; 4] {
+        let g = &self.grid;
+        let flat = |p: [f64; 2]| p[0].abs().max(p[1].abs()) <= 1e-9;
+        let d2 = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| [a[0] - 2.0 * b[0] + c[0], a[1] - 2.0 * b[1] + c[1]];
+        let d3 = |a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]| [a[0] - 3.0 * b[0] + 3.0 * c[0] - d[0], a[1] - 3.0 * b[1] + 3.0 * c[1] - d[1]];
+        let degree = |lines: &[[[f64; 2]; 4]]| {
+            if lines.iter().all(|c| flat(d2(c[0], c[1], c[2])) && flat(d2(c[1], c[2], c[3]))) {
+                1
+            } else if lines.iter().all(|c| flat(d3(c[0], c[1], c[2], c[3]))) {
+                2
+            } else {
+                3
+            }
+        };
+        // A cubic of lower degree, back at that degree: its first and last points, and for a
+        // quadratic the middle point (3 P1 - P0) / 2.
+        let reduce = |c: [[f64; 2]; 4], degree: usize| -> Vec<[f64; 2]> {
+            match degree {
+                1 => vec![c[0], c[3]],
+                2 => vec![c[0], [(3.0 * c[1][0] - c[0][0]) / 2.0, (3.0 * c[1][1] - c[0][1]) / 2.0], c[3]],
+                _ => c.to_vec(),
+            }
+        };
+        let rows: Vec<[[f64; 2]; 4]> = g.to_vec();
+        let cols: Vec<[[f64; 2]; 4]> = (0..4).map(|i| [g[0][i], g[1][i], g[2][i], g[3][i]]).collect();
+        let (across, down) = (degree(&rows), degree(&cols));
+        let reduced: Vec<Vec<[f64; 2]>> = rows.iter().map(|r| reduce(*r, across)).collect();
+        let points = (0..reduced.first().map_or(0, Vec::len))
+            .flat_map(|i| reduce(std::array::from_fn(|j| reduced.get(j).and_then(|r| r.get(i)).copied().unwrap_or([f64::NAN; 2])), down));
+        let inf = f64::INFINITY;
+        let [x0, y0, x1, y1] = points.fold([inf, inf, -inf, -inf], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+        [self.o.0 + x0 * self.size.0, self.o.1 + y0 * self.size.1, self.o.0 + x1 * self.size.0, self.o.1 + y1 * self.size.1]
+    }
+
     /// Longest segment (px) worth sending through [`StyleWarp::apply`] unsplit.
     pub fn max_segment(&self) -> f64 {
         (self.size.0.min(self.size.1) / 32.0).max(0.5)
@@ -1084,6 +1123,12 @@ impl Warp {
 
     fn style_warp(&self) -> Option<StyleWarp> {
         StyleWarp::new(self.style, self.bend, self.h_distort, self.v_distort, self.vertical, self.bounds)
+    }
+
+    /// For a preset style that bends anything, its stored envelope's box (see
+    /// [`StyleWarp::envelope_bounds`]); `None` otherwise.
+    pub fn preset_envelope_bounds(&self) -> Option<[f64; 4]> {
+        self.style_warp().map(|s| s.envelope_bounds())
     }
 
     /// Whether the warp maps every point of its box onto itself (within `1e-9` px).

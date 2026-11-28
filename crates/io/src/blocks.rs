@@ -734,6 +734,20 @@ pub(crate) fn placed_frame(warp: Option<&photocraft_geom::warp::Warp>, w: f64, h
     if ok { b } else { rect }
 }
 
+/// [`placed_frame`] for a `SoLd`/`SoLE` record: a bending preset (Arc, Flag, …) is framed by the
+/// box of its stored envelope's control points
+/// ([`photocraft_geom::warp::Warp::preset_envelope_bounds`]), as the application does when it
+/// reads a named preset. That box reaches past the source wherever the envelope does (an Arc's
+/// corners swing out), so framing the source rect instead makes the preset reopen smaller there.
+/// `PlLd` keeps [`placed_frame`]: there is no reference for presets in that record.
+pub(crate) fn sold_frame(warp: Option<&photocraft_geom::warp::Warp>, w: f64, h: f64) -> [f64; 4] {
+    let usable = |b: &[f64; 4]| b.iter().all(|v| v.is_finite()) && b[2] - b[0] > 1e-9 && b[3] - b[1] > 1e-9;
+    match warp.filter(|wp| wp.style.is_preset()).and_then(|wp| wp.preset_envelope_bounds()).filter(usable) {
+        Some(b) => b,
+        None => placed_frame(warp, w, h),
+    }
+}
+
 /// The source-space box a projective (Distort / Perspective) placement maps onto its corners: a
 /// cylinder's control-point box, as for an affine placement (#4112), else the source rect. A
 /// custom warp keeps the source rect here: there is no Photoshop reference for that combination.
@@ -759,7 +773,7 @@ pub fn parse_smart(key: &[u8; 4], data: &[u8]) -> (String, Affine) {
         let p: Vec<f64> = pts.iter().filter_map(|v| num(Some(v))).collect();
         let (w, h) = (num(sz.get("Wdth")).unwrap_or(0.0), num(sz.get("Hght")).unwrap_or(0.0));
         if let (Ok(p), true) = (<[f64; 8]>::try_from(p), w > 0.0 && h > 0.0) {
-            affine = corners_affine(&p, placed_frame(parse_placed_warp(key, data).as_ref(), w, h)).unwrap_or(Affine::IDENTITY);
+            affine = corners_affine(&p, sold_frame(parse_placed_warp(key, data).as_ref(), w, h)).unwrap_or(Affine::IDENTITY);
         }
     }
     (id, affine)
