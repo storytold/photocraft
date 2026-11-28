@@ -216,13 +216,25 @@ fn cmd_arrows_nudge_the_layer_from_the_brush() {
     assert_eq!(bounds(&app, copy), photocraft_geom::Rect::new(9, 17, 25, 33));
 }
 
-/// #2474: tools where ⌘ means something else in Photoshop (Pen and path tools, Hand, Zoom,
+/// #9931: ⌘-arrows nudge the layer from the Zoom tool too, where ⌘ is the temporary Move tool.
+#[test]
+fn cmd_arrows_nudge_the_layer_from_the_zoom_tool() {
+    let mut app = app_with_layer();
+    app.ui.tool = Tool::Zoom;
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    assert!(press(&mut app, egui::Key::ArrowRight, CTRL));
+    assert!(press(&mut app, egui::Key::ArrowDown, MAC_CMD));
+    assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(9, 9, 25, 25));
+    assert_eq!(app.ui.tool, Tool::Zoom);
+}
+
+/// #2474: tools where ⌘ means something else in Photoshop (Pen and path tools, Hand,
 /// Crop, Type) keep ⌘-arrows away from the layer, as does an active Free Transform.
 #[test]
 fn cmd_arrows_leave_the_layer_alone_where_cmd_is_not_the_move_tool() {
     let mut app = app_with_layer();
     let id = app.session.active().unwrap().active_layer.unwrap();
-    for tool in [Tool::Pen, Tool::PathSelection, Tool::DirectSelection, Tool::Rectangle, Tool::Hand, Tool::Zoom, Tool::Crop, Tool::Type] {
+    for tool in [Tool::Pen, Tool::PathSelection, Tool::DirectSelection, Tool::Rectangle, Tool::Hand, Tool::Crop, Tool::Type] {
         app.ui.tool = tool;
         assert!(!press(&mut app, egui::Key::ArrowRight, CTRL), "{tool:?}");
         assert!(!press(&mut app, egui::Key::ArrowRight, MAC_CMD | egui::Modifiers::SHIFT), "{tool:?}");

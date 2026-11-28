@@ -94,8 +94,8 @@ const GUIDE: egui::CursorIcon = egui::CursorIcon::ResizeHorizontal;
 
 /// (tool, guides locked, ⌘ latched instead of held) → whether ⌘ takes the guide: the guide cursor
 /// over it, and the guide after a drag from 200 to 240. ⌘ is the Move tool on the painting, selection,
-/// Frame and Artboard tools. The tools that keep ⌘ for themselves (Photoshop: the Pen's Direct
-/// Selection, the Hand, Zoom, Crop, type, shapes, slices) neither show the guide cursor nor drag
+/// Frame, Artboard and Zoom tools (#9931). The tools that keep ⌘ for themselves (Photoshop: the Pen's Direct
+/// Selection, the Hand, Crop, type, shapes, slices) neither show the guide cursor nor drag
 /// the guide, and a locked guide never moves. A latched ⌘ takes the guide and shows its cursor as a
 /// held one does (the press took the guide but the cursor stayed the brush's).
 #[test]
@@ -119,13 +119,13 @@ fn command_over_a_guide_takes_it_where_command_is_the_move_tool() {
         // is the Move tool on them, so the guide cursor promised a drag that never moved the guide.
         takes(Tool::Frame, false),
         takes(Tool::Artboard, false),
+        takes(Tool::Zoom, false),
         takes(Tool::Brush, true),
         takes(Tool::RectMarquee, true),
         (Tool::Brush, true, false, false),
         (Tool::Frame, true, false, false),
         (Tool::Pen, false, false, false),
         (Tool::Hand, false, false, false),
-        (Tool::Zoom, false, false, false),
         (Tool::Crop, false, false, false),
         (Tool::Type, false, false, false),
         (Tool::Rectangle, false, false, false),
@@ -159,7 +159,7 @@ fn command_over_a_guide_takes_it_where_command_is_the_move_tool() {
     // that instead of by its tool. The Crop tool keeps an app of its own for the same reason: its drag leaves a
     // pending crop frame holding the canvas.
     let mut keeps = harness(Tool::Pen);
-    for tool in [Tool::Pen, Tool::Hand, Tool::Zoom, Tool::Rectangle, Tool::Slice, Tool::Type] {
+    for tool in [Tool::Pen, Tool::Hand, Tool::Rectangle, Tool::Slice, Tool::Type] {
         // Cheap guard on the reason this app is ordered: no row so far left an open text edit that would decide
         // this one instead of its tool.
         assert!(keeps.state().ui.text_edit.is_none(), "no text edit open before {tool:?} in the keeps app");
@@ -169,5 +169,5 @@ fn command_over_a_guide_takes_it_where_command_is_the_move_tool() {
     let mut crop = harness(Tool::Crop);
     check(&mut crop, Tool::Crop, false, false, false);
     ran += 1;
-    assert_eq!(ran, rows.len(), "every row ran once: {} shared, 6 keeps, 1 crop", ran - 7);
+    assert_eq!(ran, rows.len(), "every row ran once: {} shared, 5 keeps, 1 crop", ran - 6);
 }

@@ -229,12 +229,13 @@ pub(crate) fn family(tool: Tool) -> Family {
 }
 
 /// Whether holding ⌘ (Ctrl off the Mac) over `tool` makes the Move tool take the press: every tool but the ones ⌘ means
-/// something else to (Hand, Rotate View, Zoom, the crops, Slice, the path and shape tools, the Type tools). The
+/// something else to (Hand, Rotate View, the crops, Slice, the path and shape tools, the Type tools). The Zoom tool is
+/// not one of them (#9931): ⌘ alone means nothing to it, and ⌘Space is the momentary Zoom's key, which wins. The
 /// selection tools read ⌘ per press themselves and hand the press to the stand-in (`Ignored`) where ⌘ moves the layer.
 /// `run` installs the Command stand-in by it and the snap targets of the moving set follow it.
 pub(crate) fn takes_command_stand_in(tool: Tool) -> bool {
     !tool.is_type()
-        && !matches!(family(tool), Family::Move | Family::Hand | Family::Zoom | Family::RotateView | Family::Crop | Family::PerspectiveCrop | Family::Slice)
+        && !matches!(family(tool), Family::Move | Family::Hand | Family::RotateView | Family::Crop | Family::PerspectiveCrop | Family::Slice)
         && family(tool) != Family::Vector
 }
 
@@ -349,6 +350,9 @@ struct Preflight<'a, 'x> {
     outline_open: bool,
     /// The pass has an Alt stand-in, so a press the preflight hands on (`Ignored`) reaches it.
     alt_stand_in: bool,
+    /// The pass's tool is the framework's Zoom tool, which takes every primary press, and the pass has a Command
+    /// stand-in: a ⌘ primary press is the Move tool's (#9931).
+    command_yields: bool,
 }
 
 impl CanvasTool for Preflight<'_, '_> {
@@ -432,7 +436,13 @@ impl CanvasTool for Preflight<'_, '_> {
     }
 
     fn takes(&self, button: PointerButton, mods: Mods) -> bool {
-        (!self.dialog && self.scope.with_app(|app| super::quick_pick::takes(app, mods))) || self.inner.takes(button, mods)
+        if !self.dialog && self.scope.with_app(|app| super::quick_pick::takes(app, mods)) {
+            return true;
+        }
+        if self.command_yields && button == PointerButton::Primary && mods.cmd {
+            return false;
+        }
+        self.inner.takes(button, mods)
     }
 
     fn autoscrolls(&self) -> bool {
@@ -651,7 +661,8 @@ fn with_rig<R>(
             alt_t = Some(retouch::source_tool(&scope, state, host));
         }
         let alt_stand_in = alt_t.is_some();
-        let mut pre = Preflight { scope: &scope, inner: selected, tool, dialog: dialog_picked, outline_open, alt_stand_in };
+        let command_yields = command_t.is_some() && fam == Family::Zoom;
+        let mut pre = Preflight { scope: &scope, inner: selected, tool, dialog: dialog_picked, outline_open, alt_stand_in, command_yields };
         let mut tool_host = ToolHost::new().momentary(momentary);
         if let Some(mover) = command_t.as_mut() {
             tool_host = tool_host.stand_in(StandInKey::Command, dynamic(mover));

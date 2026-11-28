@@ -357,7 +357,7 @@ fn cmd_gives_the_move_tool_only_where_the_tool_does_not_take_cmd() {
     // another shape (`selection.rs`, `MarqueeKind`).
     // One app per group, with the tool switched between cases and a fresh layer for each: starting
     // the whole app dominates the cost of a case.
-    let moves = [Tool::Brush, Tool::Gradient, Tool::CloneStamp, Tool::Eyedropper, Tool::Move, Tool::RectMarquee, Tool::Lasso];
+    let moves = [Tool::Brush, Tool::Gradient, Tool::CloneStamp, Tool::Eyedropper, Tool::Zoom, Tool::Move, Tool::RectMarquee, Tool::Lasso];
     let mut h = harness(moves[0]);
     for tool in moves {
         h.state_mut().ui.tool = tool;
@@ -373,11 +373,11 @@ fn cmd_gives_the_move_tool_only_where_the_tool_does_not_take_cmd() {
     }
     // The Crop and Rotate View tools go last, in an app of their own: they leave a pending crop and
     // a turned view behind.
-    // One tool per decision the refusal comes from: the Hand, Zoom and Rotate-View families, the vector family's
-    // shared line (the Pen stands for the shapes and both path tools), and the Type tools' `is_type` line (the
-    // vertical type tool takes the same branch). Every tool's own decision is asserted in
-    // `the_command_stand_in_rule_is_the_table`, without a drag.
-    let keeps = [vec![Tool::Hand, Tool::Zoom, Tool::Pen, Tool::Type], vec![Tool::Crop, Tool::RotateView]];
+    // One tool per decision the refusal comes from: the Hand and Rotate-View families, the vector family's shared
+    // line (the Pen stands for the shapes and both path tools), and the Type tools' `is_type` line (the vertical type
+    // tool takes the same branch). The Zoom tool gives ⌘ to the Move tool (#9931). Every tool's own decision is
+    // asserted in `the_command_stand_in_rule_is_the_table`, without a drag.
+    let keeps = [vec![Tool::Hand, Tool::Pen, Tool::Type], vec![Tool::Crop, Tool::RotateView]];
     for group in keeps {
         let mut h = harness(group[0]);
         for tool in group {
@@ -420,6 +420,7 @@ fn the_command_stand_in_rule_is_the_table() {
         Tool::MagicEraser,
         Tool::Gradient,
         Tool::PaintBucket,
+        Tool::Zoom,
         Tool::SpotHealing,
         Tool::Remove,
         Tool::Healing,
@@ -451,6 +452,34 @@ fn keeps_the_layer(h: &mut Harness<'static, Box<PhotocraftApp>>, tool: Tool) {
     assert_eq!(bounds(h, id), Rect::new(100, 100, 160, 160), "{tool:?}: the layer stays");
     assert_ne!(h.state().session.active().unwrap().history.undo_label(), Some("Move"), "{tool:?}");
     assert_eq!(h.state().ui.tool, tool);
+}
+
+/// #9931: a ⌘-drag with the Zoom tool moves the layer and does not zoom, held or latched in
+/// Window › Modifier Keys; the Zoom tool is back afterwards. ⌘Space still holds the Zoom (Zoom In).
+#[test]
+fn cmd_drag_with_the_zoom_tool_moves_the_layer_and_does_not_zoom() {
+    for latched in [false, true] {
+        let mut h = harness(Tool::Zoom);
+        let id = with_layer(&mut h);
+        let held = if latched {
+            h.state_mut().ui.shell.latched = craft::keymap::Mods::CMD;
+            Modifiers::NONE
+        } else {
+            Modifiers::COMMAND
+        };
+        let z0 = zoom(&h);
+        drag_with(&mut h, held, 130.0, 130.0, 170.0, 150.0);
+        assert_eq!(bounds(&h, id), Rect::new(140, 120, 200, 180), "latched={latched}: the layer moved by (40, 20)");
+        assert_eq!(zoom(&h), z0, "latched={latched}: no zoom");
+        assert_eq!(h.state().ui.tool, Tool::Zoom, "latched={latched}");
+    }
+    let mut h = harness(Tool::Zoom);
+    let z0 = zoom(&h);
+    key(&mut h, Key::Space, true, Modifiers::COMMAND);
+    click(&mut h, 200.0, 150.0, Modifiers::COMMAND);
+    key(&mut h, Key::Space, false, Modifiers::COMMAND);
+    hold_mods(&mut h, Modifiers::NONE);
+    assert!(zoom(&h) > z0, "⌘Space-click zooms in");
 }
 
 /// ⌘⌥-drag duplicates the layer first and moves the copy, as the Move tool's ⌥-drag does. Off
@@ -843,4 +872,51 @@ fn space_after_an_alt_tap_or_f10_pans_and_opens_no_menu() {
         assert_eq!(h.state().session.documents().len(), 1, "f10 {f10}, clicked {clicked}: no new document");
         assert_eq!(h.state().ui.tool, Tool::Brush, "f10 {f10}, clicked {clicked}: the tool comes back");
     }
+}
+
+/// #9931: a ⌘⌥ `down` with the Zoom tool in one `ui.pointer` call, and its moves and release in later calls without
+/// the modifiers, duplicate the layer and move the copy: the Move stand-in keeps the gesture it was lent until the
+/// release, and the original layer stays.
+#[test]
+fn split_cmd_alt_pointer_calls_with_the_zoom_tool_move_a_copy() {
+    use crate::control::{ControlRequest, Reply, handle};
+    fn call(app: &mut PhotocraftApp, p: serde_json::Value) {
+        let ctx = testing::ctx(app);
+        let (req, _rx) = ControlRequest::new("ui.pointer", p);
+        assert!(matches!(handle(app, &ctx, &req), Reply::Done(_)));
+        for _ in 0..4 {
+            testing::frame(app);
+        }
+    }
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app.ui.tool = Tool::Zoom;
+    testing::frame(&mut app);
+    app.run("layer.new.layer", json!({})).unwrap();
+    let orig = app.session.active().unwrap().active_layer.unwrap();
+    app.session
+        .edit("paint", |doc, a| {
+            doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(100, 100, 160, 160), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.ui.tool_options.move_auto_select = false;
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    testing::frame(&mut app);
+    let n0 = app.session.active().unwrap().doc.layers.len();
+    let z0 = testing::view(&app).expect("a view").zoom;
+    call(&mut app, json!({"command": true, "alt": true, "events": [{"kind": "down", "x": 130, "y": 130}]}));
+    call(&mut app, json!({"events": [{"kind": "move", "x": 150, "y": 140}, {"kind": "move", "x": 170, "y": 150}]}));
+    call(&mut app, json!({"events": [{"kind": "up", "x": 170, "y": 150}]}));
+    let st = app.session.active().unwrap();
+    let bounds = |id: photocraft_doc::LayerId| st.doc.layer(id).unwrap().surface().unwrap().content_bounds();
+    assert_eq!(st.doc.layers.len(), n0 + 1, "one copy");
+    let copy = st.active_layer.unwrap();
+    assert_ne!(copy, orig);
+    assert_eq!(bounds(orig), Rect::new(100, 100, 160, 160), "the original stays");
+    assert_eq!(bounds(copy), Rect::new(140, 120, 200, 180), "the copy moved");
+    assert_eq!(st.history.undo_label(), Some(tl!("Move")));
+    assert_eq!(testing::view(&app).expect("a view").zoom, z0, "no zoom");
+    assert_eq!(app.ui.tool, Tool::Zoom);
 }
