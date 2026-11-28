@@ -739,6 +739,9 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
         map.insert("centerX".into(), json!(x));
         map.insert("centerY".into(), json!(y));
     }
+    if command == crate::dialogs::contact_sheet_ui::COMMAND {
+        crate::dialogs::contact_sheet_ui::command_params(&mut map);
+    }
     if command == crate::dialogs::image_processor_ui::COMMAND {
         crate::dialogs::image_processor_ui::nest(&mut map);
     }

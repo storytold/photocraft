@@ -1,0 +1,337 @@
+//! File › Automate › Contact Sheet II…, laid out like the reference application's dialog (#13683):
+//! the sections Source Images, Document, Thumbnails and Use Filename as Caption, top to bottom.
+//!
+//! The rows are the command's params, so OK, `ui.dialog.set` and `ui.dialog.confirm` work as for every form. Three
+//! of them are kept in the shape the dialog shows and turned into the command's at OK ([`command_params`]): the
+//! resolution's unit (the command takes pixels/inch), Bit Depth (`"8"` or `"16"`) and Place (`"across"` or `"down"`).
+//! Load…, Save… and Reset… in the footer read and write the values as a settings file and restore the defaults
+//! (#13698).
+
+use craft::ui::dialog::{DialogId, PromptAnswer, PromptChoice, StandardPrompt};
+use craft::ui::patterns::form_dialogs::{CustomContext, DialogFields, FieldValue, HostedParamDialog, NumberUnit, Param, ParamKind, ParamResult};
+use craft::ui::runtime::env::{Label, UnitKind};
+use craft::ui::runtime::requests::PathKind;
+use craft::ui::sections::{DialogRole, FooterButton};
+use photocraft_engine::prefs::Unit;
+use serde_json::{Map, Value, json};
+
+use crate::PhotocraftApp;
+
+pub(crate) const COMMAND: &str = "file.automate.contactSheetII";
+
+/// The reference application's alert for OK while no image folder is chosen (#13692).
+pub(crate) const NO_FOLDER_ALERT: &str = "Select an Image Folder";
+
+const UNITS: [(&str, &str); 3] = [("inches", "inches"), ("cm", "cm"), ("pixels", "pixels")];
+const MODES: [(&str, &str); 4] = [("gray", "Grayscale"), ("rgb", "RGB Color"), ("cmyk", "CMYK Color"), ("lab", "Lab Color")];
+const DEPTHS: [(&str, &str); 2] = [("8", "8-bit"), ("16", "16-bit")];
+const PLACES: [(&str, &str); 2] = [("across", "across first"), ("down", "down first")];
+
+/// Choice options whose labels are `tl!` literals here.
+fn opts(list: &[(&'static str, &'static str)]) -> Vec<(String, Label)> {
+    list.iter().map(|(id, label)| ((*id).to_owned(), Label::from(tl!(label)))).collect()
+}
+
+/// The values the dialog's own memory leaves out, its folder and caption font, kept in the preferences' dialogs map
+/// after an OK whose run succeeded (#13695). The dialog remembers its other values itself.
+const KEPT_TEXT: [&str; 2] = ["input", "font"];
+
+/// The rows of the dialog. They open with the values of the last OK (#13695); a fresh dialog has no folder chosen
+/// (#13692): not the working folder, nor that of the document in front.
+pub(crate) fn rows(app: &PhotocraftApp) -> Vec<Param> {
+    build(&app.session.prefs().dialogs.get(COMMAND).cloned().unwrap_or_default())
+}
+
+/// The rows over the folder and font `saved` keeps (`Null`: the defaults).
+fn build(saved: &Value) -> Vec<Param> {
+    let kept = |key: &str, default: &str| saved.get(key).and_then(Value::as_str).unwrap_or(default).to_owned();
+    let resolution = vec![
+        NumberUnit::new("in", UnitKind::PixelsPerInch, tl!("pixels/inch"), 1.0),
+        NumberUnit::new("cm", UnitKind::PixelsPerCentimetre, tl!("pixels/cm"), 2.54),
+    ];
+    vec![
+        Param::section(tl!("Source Images")),
+        Param::new("input", tl!("Input"), ParamKind::text(kept("input", ""))).browse(PathKind::Folder).hint(tl!("[Select Image Folder]")),
+        // The folder, then Include Subfolders (on) and, right below it, Group Images by Folder (off, greyed while
+        // Include Subfolders is off).
+        Param::new("includeSubfolders", tl!("Include Subfolders"), ParamKind::bool(true)),
+        Param::new("groupByFolder", tl!("Group Images by Folder"), ParamKind::bool(false))
+            .enabled_when("includeSubfolders", true)
+            .tooltip(tl!("Images in subfolders will start on a new Contact Sheet")),
+        Param::section(tl!("Document")),
+        Param::new("units", tl!("Units"), ParamKind::choice(opts(&UNITS), Some("inches".into()))),
+        Param::custom(UNITS_SHOWN, Label::Empty, units_row).full_width(),
+        Param::new("width", tl!("Width"), ParamKind::number(Some(0.0), Some(300_000.0), 8.0, 0.5, 2)),
+        Param::new("height", tl!("Height"), ParamKind::number(Some(0.0), Some(300_000.0), 10.0, 0.5, 2)),
+        Param::number_with_units("resolution", tl!("Resolution"), 300.0, 1.0, 2, resolution).bounds(Some(1.0), Some(10_000.0)),
+        Param::new("flatten", tl!("Flatten All Layers"), ParamKind::bool(false)),
+        Param::new("mode", tl!("Mode"), ParamKind::choice(opts(&MODES), Some("rgb".into()))),
+        Param::new("depth", tl!("Bit Depth"), ParamKind::choice(opts(&DEPTHS), Some("8".into()))),
+        Param::section(tl!("Thumbnails")),
+        Param::new("place", tl!("Place"), ParamKind::choice(opts(&PLACES), Some("across".into()))),
+        Param::new("columns", tl!("Columns"), ParamKind::int(Some(1), Some(100), 5)),
+        Param::new("rows", tl!("Rows"), ParamKind::int(Some(1), Some(100), 6)),
+        Param::new("rotateForBestFit", tl!("Rotate For Best Fit"), ParamKind::bool(false)),
+        Param::new("autoSpacing", tl!("Use Auto-Spacing"), ParamKind::bool(true)),
+        Param::section(tl!("Use Filename as Caption")),
+        Param::new("caption", tl!("Use Filename as Caption"), ParamKind::bool(true)),
+        Param::new("font", tl!("Font"), ParamKind::text(kept("font", photocraft_text::fonts::DEFAULT_FAMILY))).enabled_when("caption", true),
+        Param::new("fontSize", tl!("Font size"), ParamKind::number(Some(1.0), None, 12.0, 1.0, 1)).unit(UnitKind::Points).enabled_when("caption", true),
+    ]
+}
+
+/// The `ParamFamily::check` of the dialog: OK without a folder shows [`NO_FOLDER_ALERT`] over the dialog, which stays
+/// open with its values. A folder that holds no images or is gone still reaches the command and gets its error.
+pub(crate) fn check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
+    if result.fields.text("input").is_some_and(|dir| !dir.is_empty()) {
+        return Ok(());
+    }
+    let message = tl!(NO_FOLDER_ALERT);
+    // Repeated confirms (automation) keep one alert.
+    crate::dialogs::alerts::alert(app, message);
+    Err(Label::from(message))
+}
+
+/// The `ParamFamily::run` of the dialog: runs the command and, when it succeeded, keeps [`KEPT_TEXT`] for the next
+/// open and the next launch. Cancel never reaches here, and a failed run keeps the values from before.
+pub(crate) fn run(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamResult) {
+    let kept: Map<String, Value> = KEPT_TEXT.iter().filter_map(|key| result.fields.text(key).map(|v| ((*key).to_owned(), json!(v)))).collect();
+    match crate::filter_dialog::run_command(app, ctx, COMMAND, result) {
+        Ok(_) => app.session.prefs.edit(|p| {
+            p.dialogs.insert(COMMAND.into(), Value::Object(kept));
+        }),
+        Err(error) => crate::notices::error(app, error),
+    }
+}
+
+/// The units Width and Height were last shown in, kept by [`follow_units`].
+const UNITS_SHOWN: &str = "unitsShown";
+
+/// The row of [`follow_units`]: it shows nothing, so Units stays a plain list and the dialog remembers it with the
+/// size. Following here converts in the pass that picked the unit.
+fn units_row(ui: &mut egui::Ui, fields: &mut DialogFields, _: &mut CustomContext) -> egui::Response {
+    follow_units(fields);
+    ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover())
+}
+
+/// Follows the Units list: switching it converts Width and Height at the resolution, as the command reads them, so
+/// the sheet keeps its size: 8 x 10 in is 20.32 x 25.4 cm, and 2400 x 3000 px at 300 ppi. The form's builder runs it
+/// too, before each pass, OK and automation write, so an OK right after `ui.dialog.set units` sends the converted size.
+pub(crate) fn follow_units(fields: &mut DialogFields) {
+    // The first build runs before the defaults are in: nothing to follow yet.
+    let Some(units) = fields.text("units").map(str::to_owned) else { return };
+    if let Some(shown) = fields.text(UNITS_SHOWN).filter(|shown| *shown != units).map(str::to_owned) {
+        let ppi = fields.number("resolution").unwrap_or(300.0);
+        let (from, to) = (unit_of(&shown), unit_of(&units));
+        for (key, default) in [("width", 8.0), ("height", 10.0)] {
+            // The command reads no size or 0 as 8 x 10 in the units it is given, so that is the size to convert.
+            let shown = fields.number(key).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(default);
+            let v = to.from_px(from.to_px(shown, ppi, 0.0, 72.0), ppi, 0.0, 72.0);
+            // Kept unrounded (the field shows two decimals): a small pixel size at a high resolution would round to
+            // 0 in, which the command reads as no size. Pixels are whole.
+            fields.set(key, if to == Unit::Pixels { v.round() } else { v });
+        }
+    }
+    if fields.text(UNITS_SHOWN) != Some(units.as_str()) {
+        fields.set(UNITS_SHOWN, units);
+    }
+}
+
+/// The unit a `units` value stands for, read as the command reads it (inches when unknown).
+fn unit_of(units: &str) -> Unit {
+    match units {
+        "cm" => Unit::Centimeters,
+        "mm" => Unit::Millimeters,
+        "px" | "pixels" => Unit::Pixels,
+        _ => Unit::Inches,
+    }
+}
+
+/// The dialog's values as the command takes them: the resolution in pixels/inch without its unit, `depth` a number
+/// and Place as `placeAcrossFirst`.
+pub(crate) fn command_params(map: &mut Map<String, Value>) {
+    map.remove("resolution.unit");
+    map.remove(UNITS_SHOWN);
+    if let Some(depth) = map.get("depth").and_then(Value::as_str).and_then(|d| d.parse::<u64>().ok()) {
+        map.insert("depth".into(), json!(depth));
+    }
+    if let Some(place) = map.remove("place") {
+        map.insert("placeAcrossFirst".into(), json!(place.as_str() != Some("down")));
+    }
+}
+
+#[path = "contact_sheet_settings_file.rs"]
+mod settings_file;
+
+/// The footer buttons after OK and Cancel, as `(action, label)`.
+pub(crate) fn footer_buttons() -> Vec<(String, FooterButton)> {
+    [("load", tl!("Load…")), ("save", tl!("Save…")), ("reset", tl!("Reset…"))]
+        .map(|(id, label)| (id.to_owned(), FooterButton::new(label, DialogRole::Other)))
+        .into()
+}
+
+/// Every open of the dialog has the same id, so Load…'s pick and Reset…'s question, answered after the dialog closed,
+/// would fill the next open. They answer only the open they were asked from, counted here.
+fn opens_id() -> egui::Id {
+    egui::Id::unique("pc-contact-sheet-opens")
+}
+
+/// Counts a new open of the dialog.
+pub(crate) fn opened(ctx: &egui::Context) {
+    ctx.data_mut(|data| {
+        let opens = data.get_temp_mut_or_default::<u64>(opens_id());
+        *opens = opens.wrapping_add(1);
+    });
+}
+
+/// The number of the dialog's latest open.
+fn opens(ctx: &egui::Context) -> u64 {
+    ctx.data(|data| data.get_temp::<u64>(opens_id())).unwrap_or_default()
+}
+
+/// The largest settings file Load… reads: the reference's are under 1 KiB.
+const SETTINGS_FILE_MAX: usize = 1 << 20;
+
+/// The `ParamFamily::footer` of the dialog: Load… and Save… read and write its values as a settings file through the
+/// platform's file dialog; Reset… asks before restoring the defaults.
+pub(crate) fn footer(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId, action: &str) {
+    let outcome = match action {
+        "load" => {
+            let (ctx, asked) = (ctx.clone(), opens(ctx));
+            app.pick_file_bytes_filtered(&["xml"], move |app, name, bytes| {
+                if opens(&ctx) == asked {
+                    load(app, &ctx, id, &name, &bytes);
+                }
+                Ok(Value::Null)
+            })
+        }
+        "save" => {
+            let Some(text) = settings_text(app, id) else { return };
+            app.pick_save(settings_file::FILE_NAME, move |app, path| {
+                let write = app.services.write.as_mut().ok_or("no writer configured")?;
+                write(&path, text.as_bytes())?;
+                Ok(json!({"path": path}))
+            })
+        }
+        "reset" => {
+            ask_reset(app, id, opens(ctx));
+            Ok(Value::Null)
+        }
+        _ => Ok(Value::Null),
+    };
+    if let Err(e) = outcome
+        && e != crate::file_dialog::CANCELLED
+    {
+        crate::dialogs::alerts::report_error(app, e);
+    }
+}
+
+/// The values of dialog `id` as a settings file; `None` once it closed.
+fn settings_text(app: &PhotocraftApp, id: DialogId) -> Option<String> {
+    let fields = app.framework.dialogs.get_by_id::<HostedParamDialog>(id)?.fields();
+    Some(settings_file::write(&file_values(fields), &settings_file::Stamp::now()))
+}
+
+/// The dialog's values in the settings file's shape: the command's, with the resolution's unit.
+fn file_values(fields: &DialogFields) -> Map<String, Value> {
+    let mut map = match serde_json::to_value(fields) {
+        Ok(Value::Object(map)) => map,
+        _ => Map::new(),
+    };
+    let unit = map.get(settings_file::RES_UNIT).cloned();
+    command_params(&mut map);
+    if let Some(unit) = unit {
+        map.insert(settings_file::RES_UNIT.into(), unit);
+    }
+    map
+}
+
+/// Load…: the values of the settings file `bytes` (named `name`) the dialog can show go into dialog `id`; the others
+/// keep the dialog's. A file that is not a settings file shows an alert and changes nothing.
+fn load(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId, name: &str, bytes: &[u8]) {
+    // The dialog may close while the picker is open; then there is nothing to fill.
+    let Some(fields) = app.framework.dialogs.get_by_id::<HostedParamDialog>(id).map(|d| d.fields().clone()) else { return };
+    let read = if bytes.len() > SETTINGS_FILE_MAX {
+        Err(tl!("too large").to_string())
+    } else {
+        std::str::from_utf8(bytes).map_err(|e| e.to_string()).and_then(|xml| settings_file::read(xml, &file_values(&fields)))
+    };
+    match read {
+        Ok(read) => apply(app, ctx, id, read),
+        Err(e) => {
+            crate::dialogs::alerts::alert(app, format!("{}: {e}", crate::file_open::display_name(name)));
+        }
+    }
+}
+
+/// Sets the values `read` (the settings file's shape) on dialog `id`. A value its row cannot show keeps the current
+/// one. Width and Height come in the file's units, so they are not converted: the units go first and are taken as
+/// shown, as each write below runs [`follow_units`].
+fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId, mut read: Map<String, Value>) {
+    if let Some(units) = read.remove("units") {
+        let _ = app.framework.dialogs.set_json_field(ctx, id, "units", units);
+        if let Some(d) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id)
+            && let Some(units) = d.fields().text("units").map(str::to_owned)
+        {
+            d.set_field(UNITS_SHOWN, FieldValue::Text(units));
+        }
+    }
+    for (key, value) in read {
+        let (key, value) = match key.as_str() {
+            "depth" => ("depth".to_owned(), json!(value.as_u64().map(|d| d.to_string()))),
+            // The file's numbers read as reals; the grid rows hold whole numbers.
+            "columns" | "rows" => (key, value.as_f64().filter(|n| n.fract() == 0.0).map_or(value, |n| json!(n as i64))),
+            "placeAcrossFirst" => ("place".to_owned(), json!(if value.as_bool() == Some(false) { "down" } else { "across" })),
+            // No control yet (#13689).
+            "horizontal" | "vertical" => continue,
+            _ => (key, value),
+        };
+        let _ = app.framework.dialogs.set_json_field(ctx, id, &key, value);
+    }
+}
+
+/// The tag of Reset…'s question: the dialog it resets and the open it was asked from ([`opens`]).
+struct ResetQuestion(DialogId, u64);
+
+/// Reset… asks first, as the reference application's script alert does.
+fn ask_reset(app: &mut PhotocraftApp, id: DialogId, asked: u64) {
+    let prompt = StandardPrompt::custom(tl!("Restore default settings?"))
+        .title(tl!("Script Alert"))
+        .button(PromptChoice::Proceed, tl!("Yes"))
+        .button(PromptChoice::Cancel, tl!("No"))
+        .tag(ResetQuestion(id, asked));
+    let _ = crate::dialogs::alerts::open_prompt(app, prompt);
+}
+
+/// The `PROMPTS` entry of Reset…'s question: Yes shows the defaults, with no folder chosen; No changes nothing. `false`
+/// for another prompt's answer.
+pub(crate) fn answer(app: &mut PhotocraftApp, ctx: &egui::Context, answer: &mut PromptAnswer) -> bool {
+    let Some(ResetQuestion(id, asked)) = answer.take_tag::<ResetQuestion>() else { return false };
+    if answer.choice == PromptChoice::Proceed
+        && opens(ctx) == asked
+        && let Some(d) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id)
+    {
+        for param in build(&Value::Null) {
+            if let Some(value) = param.kind.default_value() {
+                d.set_field(param.key.clone(), value);
+            }
+            if let Some(unit) = param.unit_key() {
+                d.set_field(unit, FieldValue::Text("in".into()));
+            }
+        }
+        d.set_field(UNITS_SHOWN, FieldValue::Text("inches".into()));
+    }
+    true
+}
+
+#[cfg(test)]
+#[path = "contact_sheet_layout_tests.rs"]
+mod contact_sheet_layout_tests;
+
+#[cfg(test)]
+#[path = "contact_sheet_ok_validation_tests.rs"]
+mod contact_sheet_ok_validation_tests;
+
+#[cfg(test)]
+#[path = "contact_sheet_sticky_tests.rs"]
+mod contact_sheet_sticky_tests;
