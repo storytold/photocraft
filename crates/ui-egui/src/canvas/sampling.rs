@@ -28,7 +28,7 @@ pub(crate) fn native_pick(app: &PhotocraftApp, at: [f64; 2], size: SampleSize, s
 /// The colour at document point `at` averaged over `size`, from the layers `source` names
 /// (`document.sampleColor`). `None` off the image or over transparency.
 pub fn sample_color(app: &mut PhotocraftApp, at: [f64; 2], size: SampleSize, source: SampleSource) -> Option<[f32; 3]> {
-    let [x, y] = at;
+    let [x, y] = pattern_wrapped(app, at);
     if !(x.is_finite() && y.is_finite()) {
         return None;
     }
@@ -44,8 +44,9 @@ pub fn sample_color(app: &mut PhotocraftApp, at: [f64; 2], size: SampleSize, sou
 /// What the Eyedropper picks at document point `at`: the targeted raster mask's value when the mask
 /// source applies, else the colour (grey unless the paint target is pixels).
 pub fn pick(app: &mut PhotocraftApp, at: [f64; 2], size: SampleSize, source: SampleSource) -> Option<[f32; 3]> {
+    let wrapped = pattern_wrapped(app, at);
     if let Some((surface, canvas)) = eyedropper_mask_source(app, source) {
-        return sample_layer_mask(surface, canvas, at, size.pixels());
+        return sample_layer_mask(surface, canvas, wrapped, size.pixels());
     }
     sample_color(app, at, size, source)
         .map(|rgb| if super::paint_target(app) == json!("pixels") { rgb } else { [photocraft_color::convert::rgb_to_gray(rgb); 3] })
@@ -64,6 +65,20 @@ pub fn eyedropper_color(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<[f32; 3
 pub fn composite_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<[f32; 3]> {
     let size = app.ui.tool_options.eyedropper.size;
     sample_color(app, [x, y], size, SampleSource::All)
+}
+
+/// View › Pattern Preview shows the document repeated round itself: a point on one of the copies
+/// samples the document where that copy shows it. With Pattern Preview off, `at` is returned as is.
+// ponytail: only the sampled point wraps; a Sample Size box over a canvas edge still stops at it.
+fn pattern_wrapped(app: &PhotocraftApp, at: [f64; 2]) -> [f64; 2] {
+    let Some(st) = app.session.active().filter(|_| app.ui.view.pattern_preview) else { return at };
+    let b = st.doc.bounds();
+    let (w, h) = (f64::from(b.width()), f64::from(b.height()));
+    if w <= 0.0 || h <= 0.0 {
+        return at;
+    }
+    let (x0, y0) = (f64::from(b.x0), f64::from(b.y0));
+    [x0 + (at[0] - x0).rem_euclid(w), y0 + (at[1] - y0).rem_euclid(h)]
 }
 
 /// Only the Eyedropper's Current Layer and Current & Below modes pick the targeted raster mask.
