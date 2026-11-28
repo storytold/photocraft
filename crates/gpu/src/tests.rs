@@ -333,6 +333,9 @@ fn coverage_texels_keep_32_bit_alpha_exact() {
     let exact = TexKind::for_surface(Role::Coverage, PixelFormat::RGBA32F);
     let full = convert_tile(&s, s.tile(c), exact, c);
     let half = convert_tile(&s, s.tile(c), TexKind::Rgba16F, c);
+    let px = (TILE_SIZE * TILE_SIZE) as usize;
+    assert_eq!(full.len(), px * exact.bytes_per_pixel(), "full-precision tile");
+    assert_eq!(half.len(), px * TexKind::Rgba16F.bytes_per_pixel(), "half-float tile");
     let texels = full.chunks_exact(exact.bytes_per_pixel()).zip(half.chunks_exact(TexKind::Rgba16F.bytes_per_pixel()));
     for (v, (f, h)) in inputs.iter().zip(texels) {
         assert_eq!(f.get(12..16), Some(v.to_le_bytes().as_slice()), "{v}");
