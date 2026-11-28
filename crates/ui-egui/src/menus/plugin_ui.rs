@@ -1,10 +1,14 @@
 //! Filter › Plug-ins: one menu item per installed WebAssembly filter plug-in (`plugin.*` engine
 //! commands), with a generated dialog and live preview for plug-ins that take parameters.
 
+use std::sync::Arc;
+
+use photocraft_plugins::Plugin;
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
 use craft::menu::Row;
+use craft::ui::dialog::DialogId;
 
 /// Menu ids of installed plug-ins: `plugin.filter.<plug-in id>`.
 const PREFIX: &str = "plugin.filter.";
@@ -73,6 +77,45 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
     fixed.insert("id".into(), json!(pid));
     let d = crate::filter_dialog::open_with_spec(app, "plugin.run", &m.name, &m.params_notation(), fixed);
     Some(Ok(json!({"dialog": d.value().to_string()})))
+}
+
+/// The installed plug-in a smart filter recorded (`plugin.run`, stored as `{id, params}`), or
+/// why that filter can't be edited.
+fn recorded_plugin(recorded: &Value) -> Result<Arc<Plugin>, String> {
+    let pid = recorded.get("id").and_then(Value::as_str).unwrap_or_default();
+    photocraft_plugins::registry::get(pid).ok_or_else(|| crate::i18n::fmt(tl!("The plug-in {id} that made this smart filter isn't installed."), &[("id", pid)]))
+}
+
+/// Re-opens the dialog of the plug-in a smart filter recorded on its recorded settings, to edit
+/// the filter at the smart-filter `target`. The dialog holds only the plug-in's own parameters;
+/// which plug-in it edits stays in `target` ([`smart_edit_params`]). `None` for a plug-in without
+/// parameters (nothing to edit, as for built-in filters); an error when the plug-in is no longer
+/// installed.
+pub fn open_smart_edit(app: &mut PhotocraftApp, recorded: &Value, target: Value) -> Result<Option<DialogId>, String> {
+    let plugin = recorded_plugin(recorded)?;
+    let m = plugin.manifest();
+    if m.params.is_empty() {
+        return Ok(None);
+    }
+    let settings: Map<String, Value> = recorded
+        .get("params")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(key, _)| m.params.iter().any(|(name, _)| name == *key))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    Ok(Some(crate::filter_dialog::open_smart_edit_with_spec(app, "plugin.run", &m.name, &m.params_notation(), &settings, target)))
+}
+
+/// The settings a plug-in smart filter's editor stores, as `plugin.run` records them: the plug-in
+/// of the captured smart-filter `target` (never a dialog value) and its parameters from the
+/// dialog `fields`, resolved against its manifest as a run resolves them.
+pub(crate) fn smart_edit_params(target: &Value, fields: &Value) -> Result<Value, String> {
+    let recorded = target.get("filter").and_then(|f| f.get("params")).unwrap_or(&Value::Null);
+    let plugin = recorded_plugin(recorded)?;
+    let params = plugin.manifest().resolve_params(fields).map_err(|e| e.to_string())?;
+    Ok(json!({"id": plugin.id(), "params": params}))
 }
 
 #[cfg(test)]

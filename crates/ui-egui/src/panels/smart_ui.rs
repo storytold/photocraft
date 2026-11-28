@@ -165,6 +165,13 @@ pub fn open_editor(app: &mut PhotocraftApp, ctx: &egui::Context, layer: u64, sm:
             return;
         }
     };
+    // A plug-in's settings come from its manifest, not from the `plugin.run` spec (#16425).
+    if f.command == photocraft_engine::plugin_cmds::RUN {
+        if let Err(e) = crate::plugin_ui::open_smart_edit(app, &f.params, target) {
+            crate::notices::error(app, e);
+        }
+        return;
+    }
     match crate::adjust_dialog::open_smart_filter_checked(app, &f.command, &f.params, target.clone()) {
         Ok(_) => return,
         // The editor refuses these parameters (a CMYK Channel Mixer, #8047): say why instead of opening nothing.
@@ -207,6 +214,9 @@ pub fn confirm_command(app: &PhotocraftApp, captured: &Value, command: String, p
 
 #[cfg(test)]
 mod editor_tests;
+
+#[cfg(test)]
+mod plugin_editor_tests;
 
 #[cfg(test)]
 mod tests {

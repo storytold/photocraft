@@ -89,6 +89,8 @@ tempfile = "3"
 craft = { workspace = true, features = ["screen-testing", "settings-testing"] }
 # The prefs tests write a saved settings file (`toml::to_string`).
 toml = { version = "1.1", default-features = false, features = ["std", "serde", "display"] }
+# Test plug-ins with parameters, written as WebAssembly text (the plug-in smart filter editor, #16425).
+wat = "1.228"
 
 [build-dependencies]
 serde_json = { workspace = true }
