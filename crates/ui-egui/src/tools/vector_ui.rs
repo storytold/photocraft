@@ -251,6 +251,9 @@ mod rectangle_gear_tests;
 mod rectangle_click_in_shape_tests;
 
 #[cfg(test)]
+mod custom_shape_live_box_tests;
+
+#[cfg(test)]
 use pen_resume::pen_finish_on_redo;
 pub(crate) use pen_resume::{FinishedPen, pen_history_enabled, pen_history_step};
 

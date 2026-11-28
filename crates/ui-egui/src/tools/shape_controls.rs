@@ -73,7 +73,10 @@ fn salt(app: &PhotocraftApp) -> Option<(DocId, u64, Tool)> {
 fn box_shows(app: &PhotocraftApp) -> bool {
     app.ui.transform.is_none()
         && app.ui.view.shows(app.ui.view.show.target_path)
-        && matches!(app.ui.tool, Tool::PathSelection | Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::Line)
+        && matches!(
+            app.ui.tool,
+            Tool::PathSelection | Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::Line | Tool::CustomShape
+        )
 }
 
 /// The shape layers the box or a corner widget is editing: the selected shape layers while one of them holds a press.
@@ -106,6 +109,16 @@ fn selection(app: &PhotocraftApp, flat_ok: bool) -> Option<(Vec<u64>, [f64; 4])>
     let ids = st.selected_layers();
     if ids.is_empty() {
         return None;
+    }
+    // #13472: with the Custom Shape tool, the box goes on the layer that tool last placed, and on no other
+    // selection. A placed custom shape is a plain path shape in the document, like a Pen or Make Shape one,
+    // so those layers keep today's no-box look with this tool (not measured); the placement record lives in
+    // the Shapes panel's state, set by the tool's own drag.
+    if app.ui.tool == Tool::CustomShape {
+        let (doc, placed) = app.ui.presets_ui.placed_custom_shape?;
+        if st.doc.id != doc || ids != [LayerId(placed)] {
+            return None;
+        }
     }
     let mut layers = Vec::with_capacity(ids.len());
     let mut rect: Option<[f64; 4]> = None;

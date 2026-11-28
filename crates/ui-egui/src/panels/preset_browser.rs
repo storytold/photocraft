@@ -769,6 +769,15 @@ pub fn finish_custom_shape(app: &mut PhotocraftApp, rect: [f64; 4], keep: bool, 
         "shape.presets.place",
         json!({"preset": name, "rect": rect, "keepAspect": keep, "fill": fill, "stroke": stroke, "useAlignedRendering": app.ui.tool_options.align_edges}),
     );
+    if let Some(r) = &r {
+        // Remember which layer this drag placed: the canvas box with its eight handles goes on the
+        // shape just drawn (#13472). The command's answer names the layer.
+        let doc = app.session.active().map(|st| st.doc.id);
+        let layer = r.get("layer").and_then(Value::as_u64);
+        if let (Some(doc), Some(layer)) = (doc, layer) {
+            app.ui.presets_ui.placed_custom_shape = Some((doc, layer));
+        }
+    }
     if r.is_none() && !photocraft_engine::presets::shapes::all_groups(&app.session).iter().any(|g| g.items.iter().any(|s| s.name == name)) {
         let template = "No custom shape \"{name}\": pick one in the options bar or Window › Shapes";
         app.ui.status = crate::i18n::fmt(tl!(template), &[("name", &name)]);

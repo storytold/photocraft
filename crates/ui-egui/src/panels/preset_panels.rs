@@ -37,6 +37,10 @@ pub struct PresetUi {
     pub current_tool_only: bool,
     /// Custom Shape tool: the shape it draws.
     pub custom_shape: String,
+    /// Custom Shape tool: the layer its last drag placed, in that document; with that tool active the
+    /// canvas box and its eight handles go on that layer alone (#13472). Never restored into another session.
+    #[serde(skip)]
+    pub placed_custom_shape: Option<(photocraft_doc::DocId, u64)>,
     /// Folder/group order per panel, by name (#3658), like the dock's `tabOrder` (#2272). A panel
     /// with no entry keeps the library's order; unknown names are ignored and groups missing from
     /// a list follow it in library order. Saved with the UI state.
