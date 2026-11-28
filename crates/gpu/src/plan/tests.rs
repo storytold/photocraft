@@ -413,6 +413,36 @@ fn fill_divides_names_the_special_eight_modes_ill_conditioned_near_full_fill() {
     }
 }
 
+/// Color Burn, Color Dodge, Vivid Light and Hard Mix divide by a quantity that reaches 0 at full
+/// Fill × alpha, which 16/32-bit half-float uploads can't hold near 1: with Transparency Shapes
+/// Layer off they stay on the CPU there, while 8 bits and the other special-eight modes plan.
+#[test]
+fn dividing_shapeless_blends_plan_at_8_bits_only() {
+    let dividing = [BlendMode::ColorBurn, BlendMode::ColorDodge, BlendMode::VividLight, BlendMode::HardMix];
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, depth, Color::WHITE);
+        let mut s = Layer::raster("shapeless", d.pixel_format());
+        s.advanced.transparency_shapes = false;
+        d.layers.push(s);
+        for mode in dividing {
+            d.layers[1].blend = mode;
+            d.layers[1].advanced.transparency_shapes = false;
+            if depth == SampleType::U8 {
+                assert!(plan(&d).is_ok(), "{mode:?} at 8 bits");
+                continue;
+            }
+            assert!(plan(&d).unwrap_err().0.contains(mode.label()), "{mode:?} without Transparency Shapes Layer at {depth:?}");
+            d.layers[1].advanced.transparency_shapes = true;
+            assert!(plan(&d).is_ok(), "{mode:?} with Transparency Shapes Layer at {depth:?}");
+        }
+        d.layers[1].advanced.transparency_shapes = false;
+        for mode in [BlendMode::LinearBurn, BlendMode::LinearDodge, BlendMode::LinearLight, BlendMode::Difference] {
+            d.layers[1].blend = mode;
+            assert!(plan(&d).is_ok(), "{mode:?} without Transparency Shapes Layer at {depth:?}");
+        }
+    }
+}
+
 #[test]
 fn advanced_blending_runs_on_the_gpu_except_clipped_shapeless_layers() {
     use photocraft_doc::Knockout;
@@ -451,33 +481,6 @@ fn advanced_blending_runs_on_the_gpu_except_clipped_shapeless_layers() {
     assert!(p.passes.iter().all(|p| p.flags & F_SHAPELESS == 0));
     t.layers[1].effects.items.push(photocraft_doc::Effect::default_drop_shadow());
     assert!(plan(&t).is_ok(), "effects without Transparency Shapes Layer");
-    // Color Burn, Color Dodge, Vivid Light and Hard Mix divide by a quantity that reaches 0 at full
-    // Fill × alpha, which 16/32-bit half-float uploads can't hold near 1: they stay on the CPU
-    // there, while 8 bits and the other special-eight modes plan.
-    t.layers[1].effects.items.clear();
-    let dividing = [BlendMode::ColorBurn, BlendMode::ColorDodge, BlendMode::VividLight, BlendMode::HardMix];
-    for mode in dividing {
-        t.layers[1].blend = mode;
-        assert!(plan(&t).is_ok(), "{mode:?} at 8 bits");
-    }
-    for depth in [SampleType::U16, SampleType::F32] {
-        let mut w = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, depth, Color::WHITE);
-        let mut s = Layer::raster("shapeless", w.pixel_format());
-        s.advanced.transparency_shapes = false;
-        w.layers.push(s);
-        for mode in dividing {
-            w.layers[1].blend = mode;
-            w.layers[1].advanced.transparency_shapes = false;
-            assert!(plan(&w).unwrap_err().0.contains(mode.label()), "{mode:?} without Transparency Shapes Layer at {depth:?}");
-            w.layers[1].advanced.transparency_shapes = true;
-            assert!(plan(&w).is_ok(), "{mode:?} with Transparency Shapes Layer at {depth:?}");
-        }
-        w.layers[1].advanced.transparency_shapes = false;
-        for mode in [BlendMode::LinearBurn, BlendMode::LinearDodge, BlendMode::LinearLight, BlendMode::Difference] {
-            w.layers[1].blend = mode;
-            assert!(plan(&w).is_ok(), "{mode:?} without Transparency Shapes Layer at {depth:?}");
-        }
-    }
     // Clipped to a base, the same cases stay on the CPU.
     t.layers[1] = l.clone();
     let mut c = l.clone();
