@@ -575,6 +575,7 @@ fn canvas_controls(
         crate::crop_task_bar::show(app, ui, bar_area);
         if primary {
             crate::transform_task_bar::show(app, ui, bar_area);
+            crate::tools::type_tool::task_bar::show(app, ui, bar_area);
         }
         crate::frame_tool::task_bar::show(ui, app, bar_area);
     }
