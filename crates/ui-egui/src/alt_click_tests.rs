@@ -211,6 +211,7 @@ fn mixer_raw_drag_commits_live_pixels_before_a_spring_tool_returns() {
                 previous: Tool::Zoom,
                 tool: Tool::MixerBrush,
                 keys: vec![],
+                commands: vec![],
                 since: 0.0,
                 up: None,
                 used: true,

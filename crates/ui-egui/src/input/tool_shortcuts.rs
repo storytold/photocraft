@@ -30,6 +30,47 @@ pub(crate) fn uses_default(app: &PhotocraftApp, tool: Tool) -> bool {
     !app.session.prefs().shortcuts.contains_key(&id(tool))
 }
 
+/// The letter that picks `tool` through the tool keys (group memory, Shift cycling, spring-loading): its
+/// default while unchanged, or a single letter the user gave it and another tool as well, either assigned or
+/// as the default of a tool of its group (#14208). A key only `tool` has stays an ordinary shortcut that
+/// selects just that tool (#4086).
+pub(crate) fn letter(app: &PhotocraftApp, tool: Tool) -> Option<char> {
+    if uses_default(app, tool) {
+        return (tool.key() != '\0').then_some(tool.key());
+    }
+    let own = user_letter(app, tool)?;
+    let shares = |t: Tool| user_letter(app, t) == Some(own) || (uses_default(app, t) && t.key() == own && tool.key() == own);
+    Tool::ALL.into_iter().any(|t| t != tool && shares(t)).then_some(own)
+}
+
+/// A single letter the user assigned to `tool`, upper case.
+fn user_letter(app: &PhotocraftApp, tool: Tool) -> Option<char> {
+    let mut chars = app.session.prefs().shortcuts.get(&id(tool))?.chars();
+    let c = chars.next().filter(char::is_ascii_alphabetic)?;
+    chars.next().is_none().then(|| c.to_ascii_uppercase())
+}
+
+/// The first tool, in toolbar order, that the tool keys give `letter` ([`letter`]): the one its Shift+letter row names.
+pub(crate) fn first_with_letter(app: &PhotocraftApp, letter: char) -> Option<Tool> {
+    Tool::ALL.into_iter().filter(|t| self::letter(app, *t) == Some(letter)).min_by_key(|t| crate::panels::toolbar::toolbar_position(*t))
+}
+
+/// The letters users gave to several tools that are no tool's default, each with its first tool in toolbar
+/// order: each needs its own Shift+letter cycle row (#14208).
+pub(crate) fn shared_letters(app: &PhotocraftApp) -> Vec<(char, Tool)> {
+    let defaults = group_letters();
+    let mut groups: Vec<(char, Tool)> = Vec::new();
+    for t in Tool::ALL {
+        let Some(letter) = letter(app, t).filter(|l| !defaults.iter().any(|(d, _)| d == l)) else { continue };
+        match groups.iter_mut().find(|(l, _)| *l == letter) {
+            Some(group) if crate::panels::toolbar::toolbar_position(t) < crate::panels::toolbar::toolbar_position(group.1) => group.1 = t,
+            Some(_) => {}
+            None => groups.push((letter, t)),
+        }
+    }
+    groups
+}
+
 /// One catalog row per tool: kind `Tool` in the group of its letter, so the tools that share a letter cycle, with the
 /// letter as the default key.
 // The runtime's own definition of each tool (`panels::tool_commands::ToolCommand`) carries the same letter and group, which is what binds the key
