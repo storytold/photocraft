@@ -1,5 +1,6 @@
 use craft::theme::variant::Tone;
 use craft::ui::contract::Show as _;
+use craft::ui::menu::MenuRow;
 use craft::ui::notices::{Notice, NoticeLayout};
 
 use super::{BlendMode, LayerId, PhotocraftApp};
@@ -22,7 +23,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     use super::layers_tree::{self, PhotoThumbs};
 
     // A Move-way pick of a layer opens its groups only when the Move option says so (#11381).
-    let reveal = crate::layer_reveal::take(app);
+    let reveal = app.pending_reveal;
     let ctx = ui.ctx().clone();
     // Thumbnail Contents is the clip preference alone, so the panel reads it each pass.
     app.ui.layers_settings.options.thumbnail_contents = crate::layers_panel_ui::thumbnail_contents(app);
@@ -46,7 +47,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .settings(settings)
         .thumbnails(&thumbs, &source)
         .filter(Bind::bound(&mut filter))
-        .row_menu(|target| layers_tree::row_menu(app, tree, target))
+        .row_menu(|target| layers_tree::row_menu(app, tree, target).into_iter().map(MenuRow::from).collect())
         .document(st.doc.id);
     if let Some((id, groups)) = reveal {
         panel = panel.reveal(id, groups);
@@ -61,8 +62,11 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         panel = panel.start_rename(id);
     }
     let out = panel.show(ui);
-    app.find_layers_focus = false;
-    app.layers_rename = None;
+    if out.requests_taken {
+        crate::layer_reveal::take(app);
+        app.find_layers_focus = false;
+        app.layers_rename = None;
+    }
     if filter != before {
         app.ui.layer_filter = filter;
     }

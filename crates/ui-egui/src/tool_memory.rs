@@ -90,7 +90,7 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if let Ok(now) = serde_json::to_value(tool)
             && app.session.prefs().selected_tool != now
         {
-            app.session.prefs.edit(|p| p.selected_tool = now);
+            app.session.prefs.remember(|p| p.selected_tool = now);
             // prefs_ui::tick ran before the panels; ensure it can flush this new revision.
             ctx.request_repaint();
         }
@@ -98,13 +98,13 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     persist_colors(app, ctx);
     persist_group_tools(app, ctx, tool);
     persist_brushes(app);
-    if app.prefs_rt.tool_options.as_ref() == Some(&app.ui.tool_options) {
+    if app.prefs_rt.tool_options.as_ref() == Some(&*app.ui.tool_options) {
         return;
     }
-    app.prefs_rt.tool_options = Some(app.ui.tool_options.clone());
+    app.prefs_rt.tool_options = Some((*app.ui.tool_options).clone());
     let now = changed(&app.ui.tool_options);
     if app.session.prefs().tool_options != now {
-        app.session.prefs.edit(|p| p.tool_options = now);
+        app.session.prefs.remember(|p| p.tool_options = now);
     }
 }
 
@@ -138,7 +138,7 @@ fn persist_colors(app: &mut PhotocraftApp, ctx: &egui::Context) {
         photocraft_engine::prefs::stamp_tool_color_picks(&mut saved, &app.session.prefs().tool_colors);
         saved
     };
-    app.session.prefs.edit(|p| p.tool_colors = photocraft_engine::prefs::ToolColors(saved));
+    app.session.prefs.remember(|p| p.tool_colors = photocraft_engine::prefs::ToolColors(saved));
     // Panels and shortcuts can change colours after prefs_ui::tick already ran this frame.
     ctx.request_repaint();
 }
@@ -289,7 +289,7 @@ fn persist_group_tools(app: &mut PhotocraftApp, ctx: &egui::Context, tool: Tool)
     if let Ok(now) = serde_json::to_value(&app.ui.group_tools)
         && app.session.prefs().group_tools != now
     {
-        app.session.prefs.edit(|p| p.group_tools = now);
+        app.session.prefs.remember(|p| p.group_tools = now);
         // As for the selected tool: prefs_ui::tick ran before the panels.
         ctx.request_repaint();
     }
@@ -322,7 +322,7 @@ fn persist_brushes(app: &mut PhotocraftApp) {
     };
     app.prefs_rt.tool_brushes = Some((owner, brushes.clone()));
     if app.session.prefs().tool_brushes != now {
-        app.session.prefs.edit(|p| p.tool_brushes = now);
+        app.session.prefs.remember(|p| p.tool_brushes = now);
     }
 }
 
@@ -422,12 +422,12 @@ pub fn restore(app: &mut PhotocraftApp) {
         }
         if let Ok(mut o) = serde_json::from_value(Value::Object(cur)) {
             sanitize(&mut o);
-            app.ui.tool_options = o;
+            *app.ui.tool_options = o;
         }
     } else if !saved.is_null() {
         log::warn!("Preferences: the remembered tool options are not an object; using the defaults");
     }
-    app.prefs_rt.tool_options = Some(app.ui.tool_options.clone());
+    app.prefs_rt.tool_options = Some((*app.ui.tool_options).clone());
     restore_colors(app);
     restore_brushes(app);
 }

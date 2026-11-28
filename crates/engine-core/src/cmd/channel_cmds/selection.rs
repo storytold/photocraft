@@ -60,6 +60,23 @@ pub(super) fn save_selection(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "channel": i, "name": name, "document": di }))
 }
 
+/// The history name of `select.loadSelection` with `p`. The Layers panel names its layer by id (a thumbnail
+/// ⌘-click, Select Pixels), and those loads take Photoshop's names (#16786): `Selection Change` for a shape's
+/// path or a vector mask, `Load Selection` for another layer's transparency or a layer mask. Calls that don't
+/// name a layer by id (Select › Load Selection) keep their names.
+fn load_label(doc: &Document, p: &Value) -> &'static str {
+    let channel = p.get("channel").and_then(|v| parse_ref(v, doc));
+    let layer = p.get("layer").and_then(Value::as_u64).and_then(|id| doc.layer(super::LayerId(id)));
+    match (channel, layer) {
+        (Some(ChanRef::Transparency), Some(l)) if matches!(l.content, super::LayerContent::Shape(_)) => "Selection Change",
+        (Some(ChanRef::Transparency), Some(l)) if !l.is_group() => "Load Selection",
+        (Some(ChanRef::VectorMask), Some(l)) if l.vector_mask.is_some() => "Selection Change",
+        (Some(ChanRef::Transparency), _) => "Load Transparency",
+        (Some(ChanRef::LayerMask), None) => "Load Layer Mask",
+        _ => "Load Selection",
+    }
+}
+
 pub(super) fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "select.loadSelection";
     let mode = match operation(p, "operation") {
@@ -89,11 +106,7 @@ pub(super) fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
     // Composite and colour channels load their luminosity / values, as ⌘-clicking them does.
     let plane = source(s, p, cmd, true)?.into_iter().next().ok_or_else(|| bad(cmd, "the channel has no pixels"))?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    let label = match p.get("channel").and_then(|v| parse_ref(v, doc)) {
-        Some(ChanRef::Transparency) => "Load Transparency",
-        Some(ChanRef::LayerMask) => "Load Layer Mask",
-        _ => "Load Selection",
-    };
+    let label = load_label(doc, p);
     let selected = s.edit(label, |doc, _| {
         doc.selection = sel::combine(doc.selection.as_ref(), &plane, doc.bounds(), mode);
         Ok(doc.selection.is_some())

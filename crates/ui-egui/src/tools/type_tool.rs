@@ -40,6 +40,7 @@ pub use editing::{cancel, commit, commit_with, edit_active, edit_at, end_if_left
 pub(crate) use editing::{commit_before_selecting, focus_editor};
 #[cfg(test)]
 pub(crate) use editing::{step_char_metric, toggle_char_style, toggle_hyphenate};
+pub(crate) use fonts::families_key;
 #[cfg(test)]
 use fonts::preview_text;
 pub use fonts::{families, style_label, styles, warm_fonts};
@@ -137,3 +138,6 @@ mod mask_escape_tests;
 
 #[cfg(test)]
 mod unchanged_edit_history_tests;
+
+#[cfg(test)]
+mod vertical_mask_alt_drag_tests;

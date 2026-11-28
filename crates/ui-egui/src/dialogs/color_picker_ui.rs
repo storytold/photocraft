@@ -2,7 +2,7 @@
 //!
 //! Every opener builds the dialog, opens it on the dialog host and records what it is for in
 //! `app.color_targets` ([`PickTarget`]). [`take`] runs once per pass from `dialogs::TAKERS`: it
-//! serves the dialog's screen pick, Add to Swatches and canvas eyedropper, previews the picked
+//! serves the dialog's Add to Swatches and canvas eyedropper, previews the picked
 //! colour in its parent ([`live_preview`]) and commits an OK to the target ([`commit`]). A hosted
 //! dialog's colour row opens a child with [`open_for_request`] and pulls the answer with
 //! [`answer_for`]; a window the app holds itself opens one with [`open_for_window`] and pulls the
@@ -169,9 +169,10 @@ fn converter(app: &PhotocraftApp) -> CmykConverter {
     CmykConverter::new(app.session.color().working(photocraft_doc::ColorMode::Cmyk)).ok().unwrap_or_else(|| CmykConverter::coated().clone())
 }
 
-/// Opens `dialog` for `target` with the app's picker features, under `parent` when it has one.
+/// Opens `dialog` for `target` with the app's picker features, under `parent` when it has one. No screen eyedropper
+/// button: the reference application's picker has none and samples by a click on the canvas (#17017).
 fn launch(app: &mut PhotocraftApp, dialog: ColorPickerDialog, parent: Option<DialogId>, target: PickTarget) -> DialogId {
-    let mut dialog = dialog.cmyk(&converter(app)).canvas_samples(true).eyedropper(true).add_to_swatches(true).instance(target.identity());
+    let mut dialog = dialog.cmyk(&converter(app)).canvas_samples(true).eyedropper(false).add_to_swatches(true).instance(target.identity());
     if let Some(idx) = app.session.active_index() {
         dialog = dialog.canvas(crate::canvas::document_display::CanvasHost::primary(app, idx).canvas_id());
     }
@@ -335,31 +336,18 @@ pub(crate) fn find(app: &PhotocraftApp, matches: impl Fn(&PickTarget) -> bool) -
         .last()
 }
 
-/// Once per pass: serves each open picker's screen pick, Add to Swatches and canvas eyedropper request,
+/// Once per pass: serves each open picker's Add to Swatches and canvas eyedropper request,
 /// previews the picked colours in their parents, and commits the pickers that finished. A second pass in
 /// one frame finds nothing new: every request is taken from the dialog once.
-pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
+pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
     if app.color_targets.is_empty() {
         return;
     }
     let ids: Vec<DialogId> = app.color_targets.keys().copied().collect();
-    // PLAN: assumed `screen_picker::busy(app: &PhotocraftApp) -> bool` and `hold(app, ctx, id, gesture)` (dialogs-w39).
-    let busy = crate::screen_picker::busy(app);
     for &id in &ids {
         let Some(d) = app.framework.dialogs.get_mut_by_id::<ColorPickerDialog>(id) else { continue };
-        d.screen_busy(busy);
-        let gesture = d.take_screen_pick();
         let swatch = d.take_add_to_swatches();
         let dropper = d.requests().take_eyedropper();
-        if let Some(gesture) = gesture {
-            crate::screen_picker::hold(app, ctx, id, gesture);
-        }
-        // PLAN: assumed `screen_picker::take(app, id) -> Option<Srgba>` (dialogs-w39).
-        if let Some(color) = crate::screen_picker::take(app, id)
-            && let Some(d) = app.framework.dialogs.get_mut_by_id::<ColorPickerDialog>(id)
-        {
-            d.set_color(PickedColor::rgb(color));
-        }
         if let Some(picked) = swatch {
             crate::swatches_ui::add_from_picker(app, picked);
         }
@@ -488,42 +476,8 @@ pub(crate) mod live_preview;
 mod tests;
 
 #[cfg(test)]
-mod screen_integration_tests {
-    use super::*;
-    use craft::color_ui::ui::StillCapture;
-    use egui::vec2;
-    use egui_kittest::{Harness, kittest::Queryable};
+mod screen_button_tests;
 
-    #[test]
-    fn text_swatch_opens_full_dialog_and_screen_pick_waits_for_ok() {
-        let mut session = photocraft_engine::Session::new();
-        session.execute("file.new", json!({"width":160,"height":120})).unwrap();
-        let id = session.execute("type.create", json!({"text":"Hello world","color":"#000000","size":24,"x":10,"y":60})).unwrap()["layer"].as_u64().unwrap();
-        let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
-            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), session, Default::default());
-            app.ui.tool = crate::state::Tool::Type;
-            app.services.screen_capture = Some(std::sync::Arc::new(|| Box::new(StillCapture::color(Srgba::rgb(1.0, 136.0 / 255.0, 0.0)))));
-            app
-        });
-        h.run_steps(8);
-        let before = h.state().session.active().unwrap().history.entries().len();
-        let fg = h.state().session.tools.foreground;
-        h.get_all_by_role_and_label(egui::accesskit::Role::ColorWell, "Text color").next().expect("the text swatch").click();
-        h.run_steps(6);
-        let picker = top(h.state()).expect("the text swatch opens the Color Picker");
-        assert!(matches!(target(h.state(), picker), Some(PickTarget::Command { command, .. }) if command == "type.setStyle"));
-        h.get_by_label("Sample color from the screen").click();
-        h.run_steps(6);
-        assert_eq!(rgb_hex(testing::current(h.state(), picker).unwrap().color), "#ff8800");
-        assert_eq!(h.state().session.active().unwrap().history.entries().len(), before, "sampling only changes the picker's colour");
-        assert_eq!(h.state().session.tools.foreground, fg);
-        h.get_by_label("OK").click();
-        h.run_steps(4);
-        let doc = &h.state().session.active().unwrap().doc;
-        let layer = doc.layer(photocraft_doc::LayerId(id)).unwrap();
-        let photocraft_doc::LayerContent::Text(text) = &layer.content else { panic!("not text") };
-        assert_eq!(text.color.to_rgba8(), [255, 136, 0, 255]);
-        assert_eq!(h.state().session.active().unwrap().history.entries().len(), before + 1);
-    }
-}
+#[cfg(test)]
+#[path = "color_picker_swatch_name_tests.rs"]
+mod swatch_name_tests;

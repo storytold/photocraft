@@ -152,10 +152,11 @@ fn caf_edited_settings_export_without_stale_wire_metadata() {
 }
 
 /// Missing defaults, malformed/repeated fields and unrepresented workspace state stay complete.
+/// An empty descriptor plays with the remembered settings (`atn_cmds/caf_action_values_tests.rs`).
 #[test]
 fn caf_unrepresented_descriptors_are_kept_and_never_partially_play() {
     let base = descriptor();
-    let mut cases = vec![Descriptor::new("null"), base.clone().with("extra", D::Boolean(true))];
+    let mut cases = vec![base.clone().with("extra", D::Boolean(true))];
     for i in 0..base.items.len() {
         let mut missing = base.clone();
         missing.items.remove(i);
@@ -167,20 +168,9 @@ fn caf_unrepresented_descriptors_are_kept_and_never_partially_play() {
         wrong.items[i].1 = D::Integer(0);
         cases.push(wrong);
     }
-    for (i, key, value) in [
-        (0, "cafSamplingRegion", "cafSamplingRegionAuto"),
-        (0, "cafSamplingRegion", "cafSamplingRegionCustom"),
-        (2, "cafColorAdaptationLevel", "cafColorAdaptationNone"),
-        (2, "cafColorAdaptationLevel", "cafColorAdaptationHigh"),
-        (2, "cafColorAdaptationLevel", "cafColorAdaptationVeryHigh"),
-        (2, "cafColorAdaptationLevel", "unknown"),
-        (3, "cafRotationAmount", "cafRotationAmountLow"),
-        (3, "cafRotationAmount", "cafRotationAmountMedium"),
-        (3, "cafRotationAmount", "cafRotationAmountHigh"),
-        (3, "cafRotationAmount", "cafRotationAmountFull"),
-        (3, "cafRotationAmount", "unknown"),
-        (6, "cafOutput", "cafOutputToDuplicateLayer"),
-    ] {
+    for (i, key, value) in
+        [(0, "cafSamplingRegion", "unknown"), (2, "cafColorAdaptationLevel", "unknown"), (3, "cafRotationAmount", "unknown"), (6, "cafOutput", "unknown")]
+    {
         let mut d = base.clone();
         d.items[i].1 = enm(key, value);
         cases.push(d);
@@ -213,28 +203,25 @@ fn caf_unrepresented_descriptors_are_kept_and_never_partially_play() {
 /// Known native defaults become explicit values; unsupported defaults/options cannot disappear.
 #[test]
 fn caf_native_exports_preserve_effective_defaults_and_refuse_unrepresented_options() {
-    for p in [json!({"sampling":"rectangular","output":"new"}), json!({"sampling":"rectangular","output":"new","seed":1,"target":"pixels"}), params()] {
+    for p in [
+        json!({"sampling":"rectangular","sampleAllLayers":false,"output":"new"}),
+        json!({"sampling":"rectangular","sampleAllLayers":false,"output":"new","seed":1,"target":"pixels"}),
+        params(),
+    ] {
         let a = load(exported(p).unwrap().descriptor.unwrap());
         assert_eq!(a.steps, vec![ActionStep::new(CMD, params())]);
     }
     let mut current = params();
     current["output"] = json!("current");
-    for p in [json!({"sampling":"rectangular"}), current.clone()] {
+    for p in [json!({"sampling":"rectangular","sampleAllLayers":false}), current.clone()] {
         let a = load(exported(p).unwrap().descriptor.unwrap());
         assert_eq!(a.steps, vec![ActionStep::new(CMD, current.clone())]);
     }
     for (key, value) in [
-        ("sampling", json!("auto")),
-        ("sampling", json!("custom")),
         ("sampling", json!("unknown")),
-        ("output", json!("duplicate")),
-        ("colorAdaptation", json!("none")),
-        ("colorAdaptation", json!("high")),
-        ("colorAdaptation", json!("veryHigh")),
-        ("rotationAdaptation", json!("low")),
-        ("rotationAdaptation", json!("medium")),
-        ("rotationAdaptation", json!("high")),
-        ("rotationAdaptation", json!("full")),
+        ("output", json!("unknown")),
+        ("colorAdaptation", json!("unknown")),
+        ("rotationAdaptation", json!("unknown")),
         ("sampleAllLayers", json!(0)),
         ("scale", Value::Null),
         ("mirror", json!("true")),
@@ -252,8 +239,19 @@ fn caf_native_exports_preserve_effective_defaults_and_refuse_unrepresented_optio
         p[key] = value;
         assert!(exported(p.clone()).is_none(), "{p}");
     }
-    for p in [json!({}), json!({"output":"new"}), json!([])] {
-        assert!(exported(p.clone()).is_none(), "unrepresented native default: {p}");
+    // The command's own defaults (Auto, Current Layer) are written out explicitly.
+    let mut defaults = params();
+    defaults["sampling"] = json!("auto");
+    defaults["output"] = json!("current");
+    let a = load(exported(json!({"sampleAllLayers":false})).unwrap().descriptor.unwrap());
+    assert_eq!(a.steps, vec![ActionStep::new(CMD, defaults.clone())]);
+    defaults["output"] = json!("new");
+    let a = load(exported(json!({"sampleAllLayers":false,"output":"new"})).unwrap().descriptor.unwrap());
+    assert_eq!(a.steps, vec![ActionStep::new(CMD, defaults)]);
+    assert!(exported(json!([])).is_none());
+    // Without `sampleAllLayers` an empty layer samples the composite, and a recorded false would not.
+    for p in [json!({}), json!({"output":"new"}), json!({"colorAdaptation":"none"}), json!({"sampling":"rectangular"})] {
+        assert!(exported(p.clone()).is_none(), "unrepresented sampling: {p}");
     }
 }
 

@@ -273,13 +273,17 @@ pub(crate) enum ContextPopup {
 /// menus come from the guides' own output and transform menus from the transform box.
 pub(crate) fn context_popup(app: &mut PhotocraftApp, tool: Tool, mods: Mods, doc: [f64; 2]) -> Option<ContextPopup> {
     use crate::canvas_tool_menu as menu;
+    // Puppet Warp's pin menu, opened earlier in the pass, takes the right-click (#16734).
+    if crate::puppet_ui::menu_open(app) {
+        return None;
+    }
     if crate::brush_mode_menu::opens_on(app, tool, mods, Some(doc)) {
         return Some(ContextPopup::Menu(MenuKind::BrushMode { plain: !crate::brush_mode_menu::is_gesture(tool, mods) }));
     }
     if crate::layer_pick_ui::is_gesture(tool, mods) {
         let layers = crate::layer_pick_ui::layers_at(app, doc[0], doc[1]);
         if !layers.is_empty() {
-            return Some(ContextPopup::Menu(MenuKind::Layers { layers }));
+            return Some(ContextPopup::Menu(MenuKind::Layers { layers, depth: Vec::new(), isolate: false }));
         }
         return (!mods.cmd && menu::pasteboard_at(app, tool, doc)).then_some(ContextPopup::Menu(MenuKind::Pasteboard));
     }

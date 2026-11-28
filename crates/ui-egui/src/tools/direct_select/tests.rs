@@ -91,8 +91,9 @@ fn pen_with_command_ends_the_path_being_drawn_when_pressed_off_it() {
     assert_eq!(draft_len(&app), Some(1));
 }
 
-/// #4022: ⌘/Ctrl-dragging an anchor of the path being drawn moves it in place; the path stays
-/// unfinished, outside the document and its history, and the Pen carries on from its last anchor.
+/// #4022: ⌘/Ctrl-dragging an anchor of the path being drawn moves it in place, and the Pen carries
+/// on from its last anchor. #12890: the path being drawn is the Work Path, so the drag is a step of
+/// its own, "Drag Anchor Point".
 #[test]
 fn pen_with_command_edits_the_path_being_drawn_in_place() {
     let mut app = app(Tool::Pen);
@@ -106,8 +107,10 @@ fn pen_with_command_edits_the_path_being_drawn_in_place() {
     assert_eq!(triples.len(), 2);
     assert_eq!(triples[1][0], [90.0, 70.0], "the anchor moved");
     assert_eq!(triples[0][0], [30.0, 30.0]);
-    assert!(app.session.active().unwrap().doc.work_path.is_none(), "not committed");
-    assert_eq!(steps(&app), before, "no history step until the path is finished");
+    let drawing = work(&app);
+    assert_eq!(drawing.subpaths[0].knots[1].anchor, Point::new(90.0, 70.0), "the Work Path is the path being drawn");
+    assert_eq!(steps(&app), before + 1, "the drag is one step");
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Drag Anchor Point"));
     // Let go of ⌘: the next click adds an anchor after the moved one.
     click(&mut app, [150.0, 150.0], Modifiers::NONE);
     assert_eq!(draft_len(&app), Some(3));
@@ -242,7 +245,7 @@ fn a_curvature_pen_double_click_through_the_canvas_rounds_a_corner() {
     app.ui.extras.rulers = false;
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1000.0, 700.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut Box<PhotocraftApp>| {
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::testing::document_area(app, ui));
         },
         app,
     );

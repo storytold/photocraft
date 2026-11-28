@@ -89,12 +89,12 @@ fn preferences_colours_open_the_color_picker() {
     let mut h = harness(|_| {});
     crate::prefs_ui::open_preferences(h.state_mut(), "guidesGridAndSlices");
     h.run_steps(4);
-    // The window's draft reaches the saved preferences on Apply: one colour key changes then.
+    // The window's draft reaches the saved preferences on OK: one colour key changes then.
     let values = |h: &Harness<'_, Box<PhotocraftApp>>| h.state().session.prefs().to_json()["guidesGridAndSlices"].clone();
     let before = values(&h);
     h.get_all_by_role(Role::ColorWell).next().expect("a colour swatch").click();
     answer(&mut h, "the first Preferences colour", None);
-    h.get_by_label("Apply").click();
+    h.get_by_label("OK").click();
     h.run_steps(3);
     let after = values(&h);
     let changed: Vec<&str> = after.as_object().unwrap().iter().filter(|(k, v)| before.get(k.as_str()) != Some(v)).map(|(k, _)| k.as_str()).collect();

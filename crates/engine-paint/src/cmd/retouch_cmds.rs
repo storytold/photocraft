@@ -17,7 +17,7 @@ use photocraft_algo::retouch::{ToneRange, dodge_burn, local_blur, local_sharpen,
 use photocraft_color::{BlendMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, LayerContent, LayerId};
 use photocraft_geom::Rect;
-use photocraft_paint::retouch::{Footprint, Region, Smudge, alpha_index, apply_coverage, apply_dab_stroke};
+use photocraft_paint::retouch::{Footprint, Region, Smudge, alpha_index, apply_coverage, apply_dab_stroke, restore_coverage};
 use photocraft_paint::{BrushSettings, Stroke, StrokePoint};
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use rayon::prelude::*;
@@ -357,9 +357,9 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: brush_params!(
-                r#","strokes":[[[x,y,pressure?],…]|{"points":[…],"size"?,"hardness"?,"spacing"?},…]? (several strokes removed together, as one job and one undo step, each with its own size, hardness and spacing when given; else "points"),"closeLoops":bool=true (a stroke around an object removes what it encloses),"sampleAllLayers":bool=false,"newLayer":bool=false (the fill goes to a new layer above the target, which stays as it was) → {"damage","layer"?} (a background job)"#
+                r#","strokes":[[[x,y,pressure?],…]|{"points":[…],"size"?,"hardness"?,"spacing"?},…]? (several strokes removed together, as one job and one undo step, each with its own size, hardness and spacing when given; else "points"),"closeLoops":bool=true (a stroke around an object removes what it encloses),"sampleAllLayers":bool=false,"newLayer":bool=false (the fill goes to a new layer above the target, which stays as it was; always on for a Smart Object layer) → {"damage","layer"? (a new edits layer; with "smartObject":true when it holds edits taken from a Smart Object layer, which kept its own pixels)} (a background job)"#
             ),
-            enabled: has_pixel_layer,
+            enabled: remove::enabled,
             run: remove::remove,
             journal: true,
         },

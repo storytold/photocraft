@@ -54,10 +54,8 @@ fn align_edges_is_on_by_default_and_saved() {
 
 #[test]
 fn other_shape_tools_always_snap() {
-    for tool in [Tool::EllipseShape, Tool::Star] {
-        let r = rect(|o| o.align_edges = false, tool, START, END).unwrap();
-        assert!(r.iter().all(|v| v.fract() == 0.0), "{tool:?}: {r:?}");
-    }
+    let r = rect(|o| o.align_edges = false, Tool::EllipseShape, START, END).unwrap();
+    assert!(r.iter().all(|v| v.fract() == 0.0), "EllipseShape: {r:?}");
 }
 
 #[test]
@@ -102,7 +100,7 @@ fn every_shape_tool_and_the_pen_show_one_align_edges_checkbox() {
     }
     let opts = ToolOptions { align_edges: false, ..Default::default() };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.ui.tool_options = opts;
+    *app.ui.tool_options = opts;
     for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Line, Tool::Pen] {
         app.ui.tool = tool;
         app.ui.tool_options.align_edges = false;

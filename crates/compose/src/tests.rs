@@ -248,7 +248,7 @@ fn pixel_layer_rows_match_tile_copy() {
                     l.fill_opacity = fill;
                     let mut doc = doc_white(40, 30);
                     doc.layers.push(l.clone());
-                    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+                    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_doc(&doc);
                     let cx = Ctx::for_doc(&doc, &patterns);
                     let layer = &doc.layers[1];
                     let backdrop = Buffer {
@@ -4404,6 +4404,29 @@ fn effect_cache_follows_a_group_childs_blend_if() {
     let cold = render(&d, d.bounds());
     assert!(before.px != cold.px, "Blend If should change the group's shadow");
     assert!(warm.px == cold.px, "stale group effect maps after a child's Blend If changed");
+}
+
+#[test]
+fn effect_cache_follows_a_group_child_being_rasterized() {
+    let mut doc = doc_white(32, 32);
+    let rect = Rect::new(4, 4, 16, 20);
+    let bottom = solid_layer("pale", rect, [1.0, 1.0, 1.0, 0.5]);
+    let mut text = solid_layer("text", rect, [0.0, 0.0, 0.0, 0.5]);
+    let raster = text.content.clone();
+    let text_id = text.id;
+    text.content = LayerContent::Text(photocraft_doc::TextLayer { cache: text.surface().cloned(), ..Default::default() });
+    let mut top = solid_layer("blend if", rect, [0.2, 0.6, 0.0, 1.0]);
+    top.blend_if.set(0, [FULL, range([0, 0], [100, 100])]);
+    let mut group = Layer::group("group", vec![bottom, text, top]);
+    group.effects.items = vec![Effect::DropShadow(Shadow { size: 2.0, spread: 0.0, ..shadow(3.0, 90.0) })];
+    doc.layers.push(group);
+    let before = render(&doc, doc.bounds());
+    doc.layer_mut(text_id).unwrap().content = raster;
+    let warm = render(&doc, doc.bounds());
+    purge_effect_cache();
+    let cold = render(&doc, doc.bounds());
+    assert!((0..32).any(|y| (0..32).any(|x| !rect.contains(x, y) && before.get(x, y) != cold.get(x, y))), "the group's shadow changes");
+    assert!(warm.px == cold.px, "rasterization must invalidate the group's shadow map");
 }
 
 /// A document whose one-colour areas are found: shared background tiles, a painted patch over

@@ -313,11 +313,12 @@ fn reset_fill_restores_the_original_native_inks_for_the_same_rgb() {
     use craft::ui::testing::Fixture;
     use std::{cell::RefCell, rc::Rc};
     let original = [0., 0., 0., 1.];
-    let reset = defaults([0.; 3], None, Some(original));
+    let reset = defaults([0.; 3], None, Some(original), None);
+    let rows = rows(&app(), [0.; 3], None, None);
     let fields = Rc::new(RefCell::new(reset.clone()));
     let shown = fields.clone();
     let mut fixture = Fixture::new(move |ui| {
-        ParamDialog::new(COMMAND, "Fill", rows([0.; 3], None)).values(Bind::bound(&mut *shown.borrow_mut())).reset_to(reset.clone()).show(ui);
+        ParamDialog::new(COMMAND, "Fill", rows.clone()).values(Bind::bound(&mut *shown.borrow_mut())).reset_to(reset.clone()).show(ui);
     });
     fixture.settle();
     fields.borrow_mut().set("contents", "color");

@@ -80,6 +80,9 @@ pub struct PsdExportOptions {
     /// pixel bytes (layers and composite) reach this and spilling is on (`None`: never). The
     /// save then holds the file model's structure, not a second copy of its pixels (#5333).
     pub stage_on_scratch_from: Option<u64>,
+    /// Write the document's ICC profile (resource 1039). Off leaves it out of the file only: the
+    /// document's colours are still read through it (a CMYK document's layers and merged image).
+    pub embed_icc: bool,
 }
 
 impl Default for PsdExportOptions {
@@ -93,6 +96,7 @@ impl Default for PsdExportOptions {
             document_path: None,
             read_linked_files: true,
             stage_on_scratch_from: None,
+            embed_icc: true,
         }
     }
 }
@@ -134,6 +138,9 @@ struct Ex<'c> {
     smart: SmartOut,
     /// The document's patterns, which Pattern Fill layers are rendered from.
     patterns: Vec<photocraft_doc::Pattern>,
+    /// How the stored pixels of a Pattern Fill layer take the pattern's colours: as the document
+    /// paints them (the grey profile's greys in a Grayscale document, #14975).
+    pattern_space: photocraft_compose::pattern::PatternSpace,
     /// The layer written as Photoshop's Background (see [`psd_background`]).
     background: Option<photocraft_doc::LayerId>,
     /// Where encoded channels go instead of memory ([`PsdExportOptions::stage_on_scratch_from`]).
@@ -1048,7 +1055,7 @@ impl Ex<'_> {
         // In the frame the layer's masks give it, like the compositor (masks are stored apart).
         // Readers composite these pixels (ours keeps them as the fill's rendering), so a pattern
         // fill must be rendered from the document's patterns, not left transparent (#1907).
-        let buf = photocraft_compose::render_fill_content(l, f, self.canvas, &self.patterns);
+        let buf = photocraft_compose::render_fill_content_in(l, f, self.canvas, &self.patterns, self.pattern_space);
         let mut s = Surface::new(self.fmt);
         let vals: Vec<f32> = buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&self.fmt, *p)).collect();
         s.write_region(self.canvas, &vals);
