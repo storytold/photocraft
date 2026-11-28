@@ -102,6 +102,7 @@ pub mod photo_cmds;
 pub mod plugin_cmds;
 pub mod preset_import_cmds;
 pub mod print_cmds;
+pub mod raw_editor_cmds;
 pub mod render_cmds;
 #[cfg(test)]
 mod rotate_canvas_bitmap_tests;

@@ -782,6 +782,9 @@ fn preference_uses_ambient_filesystem(path: &str) -> bool {
     // not widen its own file access.
     let key = segments.next();
     matches!(section, "colorSettings" | "scriptEvents" | "historyLog" | "plugIns" | "scratchDisks")
+        // RAW Defaults' External editor names a program that Edit/Develop in Raw Editor later runs:
+        // the user's own choice in Preferences, never one automation makes for them.
+        || (section == "rawDefaults" && key.is_none_or(|key| key == "externalEditor"))
         || (section == "fileHandling" && key.is_none_or(|key| key == "lutFolder"))
         || (section == "integrations" && key.is_none_or(|key| matches!(key, "readRoot" | "writeRoot")))
 }

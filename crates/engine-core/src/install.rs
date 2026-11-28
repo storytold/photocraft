@@ -62,6 +62,7 @@ const TABLES: &[Table] = &[
     ("extra_cmds", crate::extra_cmds::specs),
     ("background_cmds", crate::background_cmds::specs),
     ("file_cmds", crate::file_cmds::specs),
+    ("raw_editor_cmds", crate::raw_editor_cmds::specs),
     ("exr_cmds", crate::exr_cmds::specs),
     ("type_extra_cmds", crate::type_extra_cmds::specs),
     ("type_spell_cmds", crate::type_spell_cmds::specs),

@@ -134,6 +134,7 @@ pub use cmd::photo_cmds;
 pub use cmd::plugin_cmds;
 pub use cmd::preset_import_cmds;
 pub use cmd::print_cmds;
+pub use cmd::raw_editor_cmds;
 pub use cmd::render_cmds;
 pub use cmd::sample_cmds;
 pub use cmd::select_extra_cmds;
