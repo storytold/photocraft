@@ -880,6 +880,8 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     let mut called_name = None;
+    // A named action automation wrote keeps automation's gate here as when it plays (#11578).
+    let mut kept = None;
     let mut steps = if let Some(st) = p.get("steps") {
         parse_steps(st)?
     } else if let Some(act) = p.get("action").filter(|v| v.is_array()) {
@@ -889,6 +891,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         let index = batch_action(s.actions().playable().actions(), p)?;
         let (_, action, _) = crate::actions_cmds::playback_plan(s, &json!({"action": index}))?;
         called_name = Some(action.name.clone());
+        kept = crate::actions_cmds::kept_gate(s, &action);
         action.enabled_steps().map(|(_, step)| (step.command.clone(), step.params.clone())).collect()
     };
     let action_name = s
@@ -994,7 +997,8 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         if owns_history {
             crate::actions_cmds::begin_document_history(s, &action_name);
         }
-        let result = batch_open_documents(s, &steps, p, &output, &format, &policy, save);
+        // The steps run in this session: install the kept gate around them, as playback does.
+        let result = with_kept_gate(s, kept, |s| batch_open_documents(s, &steps, p, &output, &format, &policy, save));
         if owns_history {
             crate::actions_cmds::finish_document_history(s);
         }
@@ -1027,7 +1031,12 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         save.tiff_layers = save_close_tiff_layers;
         save.preserve_alpha = true;
     }
-    let authorize = s.authorize;
+    // Scratch sessions answer to the caller's gate, or to the kept gate of an action automation
+    // wrote: a gate can only be added here, never removed.
+    let authorize = s.authorize.or(kept);
+    // Scratch sessions know automation's gate too, so an action the steps play (`actions.play`)
+    // that automation wrote keeps it there as in this session (#11578).
+    let automation_gate = s.automation_gate;
     let raw_ppi = super::open::raw_open_resolution(s);
     let action_prefs = s.prefs().actions.clone();
     // An empty recorded Content-Aware Fill step plays with the remembered workspace settings.
@@ -1163,6 +1172,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     Ok(())
                 };
                 scratch.authorize = authorize;
+                scratch.automation_gate = automation_gate;
                 *scratch.actions_mut() = actions.clone();
                 scratch.recording = run.clone();
                 scratch.recording.playback_steps = carried.get();
@@ -1279,6 +1289,18 @@ fn recorded_output_guard(p: &Value) -> bool {
         || p.get("namingComponents").is_some_and(|value| !value.is_null())
 }
 
+/// Run `f` under `kept`, automation's gate for an action automation wrote
+/// ([`crate::actions_cmds::kept_gate`]), when there is one; removed again after.
+fn with_kept_gate<T>(s: &mut Session, kept: Option<fn(&str, &Value) -> Result<()>>, f: impl FnOnce(&mut Session) -> T) -> T {
+    if kept.is_none() {
+        return f(s);
+    }
+    s.authorize = kept;
+    let result = f(s);
+    s.authorize = None;
+    result
+}
+
 /// Source: Opened Files runs on the live documents, so edits remain in their histories.
 /// Documents are identified before playback; a step that closes or reorders tabs cannot make
 /// the next input silently become a different document.
@@ -1349,6 +1371,11 @@ fn batch_open_documents(
                 // A recorded Save is a step too: Batch writes the output for it.
                 charge_script_step(s)?;
                 if batch_save_point(command) {
+                    // A save point isn't executed, so the gate wouldn't see it: ask it here, as the
+                    // folder source does, before the output is written.
+                    if let Some(gate) = s.authorize {
+                        gate(command, params)?;
+                    }
                     let state = s.active_mut().ok_or(EngineError::NoDocument)?;
                     saved = Some(state.doc.clone());
                     // With no destination nothing is written, so the document stays changed.
