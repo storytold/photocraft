@@ -163,6 +163,8 @@ pub struct SaveJob {
     /// Started with Save in Background off: the app waits for it under the blocking progress overlay
     /// (see [`foreground_save`]).
     pub foreground: bool,
+    /// A Close requested while this save was running. Only a successful write resumes it.
+    close_when_saved: bool,
 }
 
 /// The shell's job bookkeeping.
@@ -449,7 +451,7 @@ pub fn start_save(
         Started::Job(job) => {
             // Preferences › File Handling › Save in Background, read when the save starts.
             let foreground = !app.session.prefs().file_handling.save_in_background;
-            app.jobs.saves.push(SaveJob { job, doc, revision, path, copy, automation, state, ended: false, foreground });
+            app.jobs.saves.push(SaveJob { job, doc, revision, path, copy, automation, state, ended: false, foreground, close_when_saved: false });
             // Control and MCP requests wait on it, as for other jobs.
             app.jobs.last_started = Some(job);
             // The status bar's progress readout names the save; clear any old message.
@@ -464,6 +466,13 @@ fn warnings_of(v: &Value) -> Vec<String> {
     v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
 }
 
+/// Hold a tab's Close until its in-flight save succeeds.
+pub(crate) fn close_when_saved(app: &mut PhotocraftApp, doc: DocId) -> bool {
+    let Some(save) = app.jobs.saves.iter_mut().find(|s| s.doc == doc && !s.ended) else { return false };
+    save.close_when_saved = true;
+    true
+}
+
 /// A background save ended: record it, or report why not. The close prompt waiting on it moves
 /// on, or asks again.
 fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, label: &str, outcome: JobOutcome) {
@@ -476,6 +485,9 @@ fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, labe
             }
             if !save.copy {
                 crate::discard_ui::saved_document(app, ctx, save.doc);
+            }
+            if save.close_when_saved {
+                crate::discard_ui::close_saved_document(app, ctx, save.doc);
             }
         }
         JobOutcome::Failed(err) => {
