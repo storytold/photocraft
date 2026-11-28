@@ -7,7 +7,7 @@
 
 use craft::behavior::dock::{NamedWorkspace, WorkspaceChrome, WorkspaceError, WorkspaceKeeps, WorkspaceSet};
 use craft::keymap::{CommandRef, Mods};
-use craft::ui::contract::{Bind, CommandSet as _};
+use craft::ui::contract::{Bind, CommandSet as _, Entry};
 use craft::ui::dialog::DialogResult;
 use craft::ui::docking::{WorkspaceAsk, WorkspaceCommands, run_workspace, workspace_states};
 use craft::ui::patterns::dock::{HostedDeleteWorkspace, HostedNewWorkspace, NewWorkspace};
@@ -315,6 +315,52 @@ pub fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
             let _ = delete_id(app, &id);
         }
     }
+}
+
+/// A row of the options bar's workspace switcher. Each runs the Window › Workspace command of the same row.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum SwitcherPick {
+    /// Make workspace `id` current (`window.workspace.<id>`).
+    Workspace(String),
+    /// Reset the current workspace (`workspace.reset`).
+    Reset,
+    /// New Workspace… (`workspace.new`).
+    New,
+    /// Delete Workspace… (`workspace.delete`).
+    Delete,
+}
+
+impl SwitcherPick {
+    /// The id of the Window › Workspace command the row runs.
+    pub(crate) fn command(&self) -> String {
+        match self {
+            SwitcherPick::Workspace(id) => format!("window.workspace.{id}"),
+            SwitcherPick::Reset => "workspace.reset".into(),
+            SwitcherPick::New => "workspace.new".into(),
+            SwitcherPick::Delete => "workspace.delete".into(),
+        }
+    }
+}
+
+/// The rows of the options bar's workspace switcher, as in the reference application: the built-in workspaces sorted
+/// by name with the current one checked, the saved ones after them as Window › Workspace lists them, then Reset with
+/// the current workspace's name, New Workspace… and Delete Workspace…. Lock Workspace and Keyboard Shortcuts stay in
+/// the Window menu.
+pub(crate) fn switcher_entries(set: &WorkspaceSet<String>) -> Vec<Entry<SwitcherPick>> {
+    let row = |w: &NamedWorkspace<String>| Entry::new(SwitcherPick::Workspace(w.id.clone()), w.name.clone()).checked(set.current == w.id);
+    let mut builtin: Vec<&NamedWorkspace<String>> = set.builtin.iter().collect();
+    builtin.sort_by_cached_key(|w| w.name.to_lowercase());
+    let mut rows: Vec<Entry<SwitcherPick>> = builtin.into_iter().map(row).collect();
+    if !set.saved.is_empty() {
+        rows.push(Entry::separator());
+        rows.extend(set.saved.iter().map(row));
+    }
+    rows.push(Entry::separator());
+    let current = set.find(&set.current).map_or("", |w| w.name.as_str());
+    rows.push(Entry::new(SwitcherPick::Reset, tl!("Reset {}").replacen("{}", current, 1)));
+    rows.push(Entry::new(SwitcherPick::New, tl!("New Workspace…").to_owned()));
+    rows.push(Entry::new(SwitcherPick::Delete, tl!("Delete Workspace…").to_owned()));
+    rows
 }
 
 /// The state of each workspace command, for the command source.

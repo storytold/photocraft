@@ -51,8 +51,11 @@ pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
     let gesture = crate::canvas::tools::in_gesture(app);
     let hidden = app.session.active().map(|st| (st.doc.id.0, app.ui.hidden_work_path.as_ref().map(|(id, _)| *id)));
     let paths = (app.ui.pen.as_ref().map(|p| p.draft.knots.len()), hidden);
-    // The Search button at the bar's right end shows whether the search is open; Escape closes it without a command.
-    let right_end = app.ui.palette.open;
+    // The bar's right end: the Search button shows whether the search is open (Escape closes it without a command), and
+    // the workspace switcher's menu the workspaces and the current one (the New and Delete dialogs change them without
+    // a command).
+    let set = &app.workspaces.set;
+    let right_end = (app.ui.palette.open, &set.current, set.saved.iter().map(|w| (&w.id, &w.name)).collect::<Vec<_>>());
     version(app, (bar_view(app), sessions, shown, brush(app), colours(app), gesture, paths, right_end))
 }
 

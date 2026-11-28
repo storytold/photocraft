@@ -46,8 +46,9 @@ fn the_search_button_sits_at_the_right_end_of_the_options_bar() {
     let home = home(&h);
     assert!(search.center().y > home.top() && search.center().y < home.bottom(), "on the bar's line: {search:?} vs Home {home:?}");
     assert!(search.right() > WIDTH - 48.0, "at the bar's right end: {search:?}");
-    // Every other control on the bar's line sits left of it.
-    let line = |r: Rect| r.center().y > home.top() && r.center().y < home.bottom();
+    // Every other control on the bar's line sits left of it, but the workspace switcher (#16799), which ends the bar.
+    let switcher = h.query_by_role_and_label(Role::Button, "Choose a Workspace").map(|n| n.rect());
+    let line = |r: Rect| r.center().y > home.top() && r.center().y < home.bottom() && Some(r) != switcher;
     let rightmost_other = h
         .query_all_by_role(Role::Button)
         .chain(h.query_all_by_role(Role::CheckBox))
@@ -56,7 +57,7 @@ fn the_search_button_sits_at_the_right_end_of_the_options_bar() {
         .filter(|r| line(*r) && *r != search)
         .map(|r| r.right())
         .fold(f32::MIN, f32::max);
-    assert!(rightmost_other <= search.left(), "nothing on the bar is right of Search: {rightmost_other} > {}", search.left());
+    assert!(rightmost_other <= search.left(), "nothing on the bar but the switcher is right of Search: {rightmost_other} > {}", search.left());
 }
 
 #[test]
