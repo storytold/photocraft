@@ -578,6 +578,8 @@ fn menu_pick(app: &mut PhotocraftApp, ctx: &egui::Context, row: &Option<LayerRow
     let Some(id) = layer else { return };
     if command == layers_tree::SELECT_PIXELS {
         actions.push(("select.loadSelection".into(), layers_tree::select_pixels(id)));
+    } else if let Some(operation) = command.strip_prefix(layers_tree::LOAD_PIXELS) {
+        actions.push(("select.loadSelection".into(), json!({"channel": "transparency", "layer": id.0, "operation": operation})));
     } else if let Some(operation) = command.strip_prefix(layers_tree::LOAD_MASK) {
         actions.push(("select.loadSelection".into(), json!({"channel": "mask", "layer": id.0, "operation": operation})));
     } else if command == layers_tree::MASK_REFINE {

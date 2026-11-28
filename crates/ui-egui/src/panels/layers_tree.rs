@@ -555,7 +555,7 @@ impl LayerTree for PhotoLayers {
     }
 
     fn label_colors_in_menu(&self, target: &MenuTarget<LayerId>) -> bool {
-        matches!(menu_kind(self, target), MenuKind::Layer(_))
+        matches!(menu_kind(self, target), MenuKind::Layer(_) | MenuKind::Thumbnail(_))
     }
 
     fn hovered(&self) -> Option<LayerId> {
@@ -567,8 +567,8 @@ impl LayerTree for PhotoLayers {
 enum MenuKind {
     /// The empty space: thumbnail size and clipping.
     Empty,
-    /// A pixel layer's thumbnail: Select Pixels, then thumbnail size and clipping.
-    Thumbnail,
+    /// A layer thumbnail's short menu: blending, the transparency loads, size and clipping.
+    Thumbnail(LayerId),
     /// A layer mask's thumbnail.
     Mask(LayerId),
     /// An effects row.
@@ -585,12 +585,19 @@ fn menu_kind(tree: &PhotoLayers, target: &MenuTarget<LayerId>) -> MenuKind {
         Some(LayerRowKey::Effects(..)) => MenuKind::Effects,
         Some(LayerRowKey::Layer(id)) => {
             let Some(l) = tree.layer(id) else { return MenuKind::None };
+            // #16777 measured visible, unlocked, unclipped rows and left every other state on today's
+            // menu: the short one only where a pixel layer already had it. A Background's own
+            // transparency and position locks are measured - its row stands in the table - so only a
+            // lock the Background does not carry by itself counts as locked there.
+            let background = tree.doc().is_background(*id);
+            let unlocked = if background { !(l.locks.all || l.locks.pixels || l.locks.artboard) } else { !l.locks.any() };
+            let measured_state = l.visible && !l.clipped && unlocked;
+            let short_menu_today = matches!(l.content, LayerContent::Raster(_)) && !background;
             match target.part {
                 Some(LayerPart::LayerMask) if l.mask.is_some() => MenuKind::Mask(*id),
-                // A pixel layer's thumbnail; not the Background's, which has no transparency to load.
-                Some(LayerPart::Pixels) if matches!(l.content, LayerContent::Raster(_)) && l.frame.is_none() && !tree.doc().is_background(*id) => {
-                    MenuKind::Thumbnail
-                }
+                // A thumbnail opens the short menu for every kind (#16777). Frames, artboards and the
+                // hidden, locked or clipped rows the issue did not measure keep today's menu.
+                Some(LayerPart::Pixels) if l.frame.is_none() && l.artboard().is_none() && (measured_state || short_menu_today) => MenuKind::Thumbnail(*id),
                 Some(LayerPart::LayerMask | LayerPart::VectorMask | LayerPart::FilterMask) => MenuKind::None,
                 _ => MenuKind::Layer(*id),
             }
@@ -614,12 +621,13 @@ pub(crate) const RENAME: &str = "layersPanel:rename";
 pub(crate) const THUMB_SIZE: &str = "layersPanel:thumbs:";
 pub(crate) const CLIP_THUMBS: &str = "layersPanel:clip:";
 pub(crate) const SELECT_PIXELS: &str = "layersPanel:selectPixels";
+pub(crate) const LOAD_PIXELS: &str = "layersPanel:loadPixels:";
 pub(crate) const LOAD_MASK: &str = "layersPanel:loadMask:";
 pub(crate) const MASK_REFINE: &str = "layersPanel:selectAndMask";
 pub(crate) const MASK_OPTIONS: &str = "layersPanel:maskOptions";
 
 /// The row menu at `target` as entries: the layer menu (Photoshop's order, trimmed to the kind),
-/// a mask thumbnail's menu, a pixel thumbnail's, an effects row's, or the empty space's.
+/// a mask thumbnail's menu, a layer thumbnail's, an effects row's, or the empty space's.
 pub(crate) fn row_menu(app: &PhotocraftApp, tree: &PhotoLayers, target: &MenuTarget<LayerId>) -> Vec<Entry<String>> {
     let has_selection = tree.doc().selection.is_some();
     let commands = |entries: Vec<crate::layer_menu_ui::Entry>, on_set: bool| -> Vec<Entry<String>> {
@@ -663,8 +671,29 @@ pub(crate) fn row_menu(app: &PhotocraftApp, tree: &PhotoLayers, target: &MenuTar
             thumbnail_items(&mut out);
             out
         }
-        MenuKind::Thumbnail => {
-            let mut out = vec![Entry::new(SELECT_PIXELS.to_string(), tl!("Select Pixels").to_string()), Entry::separator()];
+        MenuKind::Thumbnail(id) => {
+            let Some(l) = tree.layer(&id) else { return Vec::new() };
+            // Measured greyed states: no selection greys the three Transparency Mask rows; Edit Adjustment… is
+            // live only on an adjustment layer; a group also greys Select Pixels; the Background greys
+            // everything but the size and clip rows (#16777).
+            let background = tree.doc().is_background(id);
+            let group = l.is_group();
+            let mask_rows_live = has_selection && !background && !group;
+            let mut out = vec![
+                Entry::new("layer.layerStyle.blendingOptions".to_string(), tl!("Blending Options…").to_string())
+                    .enabled(!background && crate::menus::is_enabled(app, "layer.layerStyle.blendingOptions")),
+                Entry::new("layer.layerContentOptions".to_string(), tl!("Edit Adjustment…").to_string())
+                    .enabled(matches!(l.content, LayerContent::Adjustment(_)) && crate::menus::is_enabled(app, "layer.layerContentOptions")),
+                Entry::separator(),
+                Entry::new(SELECT_PIXELS.to_string(), tl!("Select Pixels").to_string()).enabled(!background && !group),
+                Entry::separator(),
+            ];
+            for (label, op) in
+                [(tl!("Add Transparency Mask"), "add"), (tl!("Subtract Transparency Mask"), "subtract"), (tl!("Intersect Transparency Mask"), "intersect")]
+            {
+                out.push(Entry::new(format!("{LOAD_PIXELS}{op}"), label.to_string()).enabled(mask_rows_live));
+            }
+            out.push(Entry::separator());
             thumbnail_items(&mut out);
             out
         }
@@ -813,3 +842,7 @@ pub(crate) fn select_pixels(layer: LayerId) -> Value {
 #[cfg(test)]
 #[path = "indexed_background_name_tests.rs"]
 mod indexed_background_name_tests;
+
+#[cfg(test)]
+#[path = "layers_thumbnail_menu_tests.rs"]
+mod layers_thumbnail_menu_tests;
