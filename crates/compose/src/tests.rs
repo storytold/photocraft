@@ -4458,13 +4458,15 @@ fn one_colour_areas_reduce_like_composited_ones() {
     // #4017: one-colour tiles are composited once and summed per run of columns: the same
     // averages as compositing every pixel (to float rounding), and a damage render gives exactly
     // the whole reduction's pixels, so a reduced canvas updated in parts shows no seams.
-    let d = sparse_doc(2000, 2100);
+    // Five full tiles per axis plus partial edges leave room for the painted and sparse areas.
+    let d = sparse_doc(1281, 1281);
+    let canvas = d.bounds();
     for (b, w, h, band) in [
-        (d.bounds(), 37, 41, 0),
-        (d.bounds(), 250, 2100, 256),
-        (d.bounds(), 1999, 3, 512),
-        (Rect::new(-300, -77, 2200, 2300), 61, 29, 0),
-        (Rect::new(13, 5, 2000, 2100), 1, 1, 256),
+        (canvas, 37, 41, 0),
+        (canvas, 183, 1281, 256),
+        (canvas, 1280, 3, 512),
+        (Rect::new(-47, -77, 1326, 1344), 61, 29, 0),
+        (Rect::new(13, 5, 1281, 1281), 1, 1, 256),
     ] {
         let reference = render_reduced_with(&d, b, w, h, None, band, false, &mut ReducedStats::default());
         let mut stats = ReducedStats::default();
@@ -4475,8 +4477,9 @@ fn one_colour_areas_reduce_like_composited_ones() {
         for (p, q) in all.px.iter().zip(&reference.px) {
             assert!(p.iter().zip(q).all(|(a, b)| (a - b).abs() < 1e-4), "{b:?} {w}x{h} band {band}: {p:?} vs {q:?}");
         }
-        for dmg in [Rect::new(250, 210, 260, 220), Rect::new(0, 0, 2000, 2100), Rect::new(-50, 640, 3000, 641), Rect::new(1500, 1500, 1600, 1900)] {
+        for dmg in [Rect::new(250, 210, 260, 220), canvas, Rect::new(-50, 640, 1400, 641), Rect::new(950, 950, 990, 1200)] {
             let part = render_reduced_with(&d, b, w, h, Some(dmg), band, true, &mut ReducedStats::default());
+            assert!(!part.rect.is_empty(), "{b:?} {w}x{h} band {band} damage {dmg:?}");
             for y in part.rect.y0..part.rect.y1 {
                 for x in part.rect.x0..part.rect.x1 {
                     assert_eq!(part.get(x, y), all.get(x, y), "{b:?} {w}x{h} band {band} {dmg:?} at {x},{y}");
