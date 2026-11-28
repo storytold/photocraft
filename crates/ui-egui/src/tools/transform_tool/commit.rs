@@ -2,7 +2,7 @@ use craft::behavior::EditEvent;
 use craft::behavior::kurbo::Point;
 use craft::draw::ui::transform::{TransformEdit, TransformRequest};
 
-use super::begin::{fold_made, moves_kind, moving_layers, rect_to_quad_affine, take_back_made};
+use super::begin::{fold_made, moves_group, moves_kind, moving_layers, rect_to_quad_affine, take_back_made};
 use super::{
     Arc, DocId, FreeTransform, JobEvent, JobId, JobOutcome, LayerContent, LayerId, MadeLayer, OpenPreview, PhotocraftApp, SessionWarp, Several, json,
     preset_for_command, swap_mode_texels,
@@ -398,6 +398,20 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
         return Some(false);
     }
     let t = app.ui.transform.as_ref()?;
+    // One box over several layers doesn't warp (#6501), nor one over a group (#16731), and not
+    // while its commit runs either.
+    if matches!(
+        id,
+        "edit.transform.warp"
+            | "layer.smartObjects.warp"
+            | "edit.transform.splitWarpCrosswise"
+            | "edit.transform.splitWarpHorizontally"
+            | "edit.transform.splitWarpVertically"
+            | "edit.transform.removeWarpSplit"
+    ) && (!t.layers.is_empty() || moves_group(app, t))
+    {
+        return Some(false);
+    }
     if committing(app).is_some() {
         return box_command(id).then_some(false);
     }
@@ -414,17 +428,6 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
         SAVE_FOR_WEB | COPY_CSS => Some(false),
         // Rotate and Flip turn the box (not while warping, where the mesh is the box).
         _ if preset_for_command(id).is_some() => Some(t.session.warp().is_none()),
-        // One box over several layers doesn't warp (#6501).
-        "edit.transform.warp"
-        | "layer.smartObjects.warp"
-        | "edit.transform.splitWarpCrosswise"
-        | "edit.transform.splitWarpHorizontally"
-        | "edit.transform.splitWarpVertically"
-        | "edit.transform.removeWarpSplit"
-            if !t.layers.is_empty() =>
-        {
-            Some(false)
-        }
         // Editable type can't be distorted (#2630, as #2701 rules for the menus outside a box).
         "edit.transform.distort" | "edit.transform.perspective" if moves_type(app, t) => Some(false),
         _ => None,

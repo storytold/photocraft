@@ -58,6 +58,11 @@ pub(super) fn vector_mask_add(s: &mut Session, p: &Value, from_path: bool) -> Re
 }
 
 pub(super) fn vector_mask_edit(s: &mut Session, p: &Value) -> Result<Value> {
+    edit_vector_mask(s, p, "Edit Vector Mask")
+}
+
+/// `layer.vectorMask.edit` with `p`, its history step named `label`.
+fn edit_vector_mask(s: &mut Session, p: &Value, label: &str) -> Result<Value> {
     const CMD: &str = "layer.vectorMask.edit";
     let id = layer_id(s, p)?;
     let path = p.get("path").map(parse_path).transpose().map_err(|e| bad(CMD, e))?;
@@ -100,7 +105,7 @@ pub(super) fn vector_mask_edit(s: &mut Session, p: &Value) -> Result<Value> {
         })?;
         return vector_mask_info(s, id);
     }
-    s.edit("Edit Vector Mask", |doc, _| {
+    s.edit(label, |doc, _| {
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let vm = l.vector_mask.as_mut().ok_or_else(|| EngineError::Other("layer has no vector mask".into()))?;
         if let Some(pth) = path {
@@ -194,6 +199,15 @@ pub(super) fn toggle_vector_mask(s: &mut Session, p: &Value, key: &str) -> Resul
         let vm = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?.vector_mask.as_ref().ok_or_else(|| EngineError::Other("layer has no vector mask".into()))?;
         if key == "enabled" { vm.enabled } else { vm.linked }
     };
+    // A call that says the direction (the Layers panel's ⇧-click and chain) is named by it, as in Photoshop
+    // (#16786); a plain toggle (Layer › Vector Mask) keeps its name.
+    let label = match (key, p.get(key).and_then(Value::as_bool)) {
+        ("enabled", Some(true)) => "Enable Vector Mask",
+        ("enabled", Some(false)) => "Disable Vector Mask",
+        (_, Some(true)) => "Link Vector Mask",
+        (_, Some(false)) => "Unlink Vector Mask",
+        (_, None) => "Edit Vector Mask",
+    };
     let v = p.get(key).and_then(Value::as_bool).unwrap_or(!cur);
-    vector_mask_edit(s, &json!({ "layer": id.0, key: v }))
+    edit_vector_mask(s, &json!({ "layer": id.0, key: v }), label)
 }
