@@ -125,6 +125,9 @@ mod arrange_menu_order_tests;
 mod bar_cursor_tests;
 
 #[cfg(test)]
+mod wia_no_device_tests;
+
+#[cfg(test)]
 mod open_recent_tests {
     use super::*;
     use serde_json::json;
