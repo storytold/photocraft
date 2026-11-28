@@ -258,17 +258,34 @@ fn caret_style_is_discarded_by_navigation_cancel_undo_and_document_switch() {
 #[test]
 fn returning_focus_to_the_same_canvas_caret_keeps_the_chosen_typing_font() {
     let (mut h, id) = fixture(0, "abcdef");
-    select(&mut h, [6, 6]);
+    let click_end = |h: &mut H| {
+        let (layout, affine, text) = super::layout(h.state_mut(), id).unwrap();
+        let last = text.char_indices().next_back().unwrap().0;
+        let glyph = layout.clusters.iter().find(|cluster| cluster.range.start == last).unwrap();
+        let line = &layout.lines[glyph.line];
+        let point = affine.apply(photocraft_geom::Point::new(f64::from(glyph.x + 0.8 * glyph.advance), f64::from(line.baseline - 0.35 * line.ascent)));
+        let pos = crate::canvas::testing::to_screen(h.state(), [point.x, point.y]);
+        h.hover_at(pos);
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            h.run_steps(1);
+        }
+    };
+
+    select(&mut h, [0, 0]);
     h.run();
+    click_end(&mut h);
+    assert_eq!(h.state().ui.text_edit.as_ref().unwrap().caret, 6, "the click reached the last glyph");
     choose(&mut h, FONTS[1], "enter");
-    select(&mut h, [6, 6]);
-    h.run();
+    click_end(&mut h);
     assert_eq!(h.state().ui.text_edit.as_ref().unwrap().caret, 6);
     assert!(super::insertion_style::pending(h.state()).is_some());
-    surrender_focus(&mut h);
-    super::host::type_text(h.state_mut(), "XYZ");
+    h.event(egui::Event::Text("XYZ".into()));
     h.run();
-    assert_eq!(families(&saved(&h, id)), [FONTS[0], FONTS[0], FONTS[0], FONTS[0], FONTS[0], FONTS[0], FONTS[1], FONTS[1], FONTS[1]]);
+    let typed = saved(&h, id);
+    assert_eq!(typed["text"], "abcdefXYZ");
+    assert_eq!(families(&typed), [FONTS[0], FONTS[0], FONTS[0], FONTS[0], FONTS[0], FONTS[0], FONTS[1], FONTS[1], FONTS[1]]);
 }
 
 /// Deleting keeps the pending caret font (`EditKind::Deleted`, `pending_across_deletion`).
