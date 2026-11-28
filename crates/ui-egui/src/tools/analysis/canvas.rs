@@ -23,9 +23,6 @@ use crate::canvas::document_display::CanvasHost;
 use crate::canvas::tools::{FamilyTool, ToolScope};
 use crate::state::Tool;
 
-/// A drag of a Count marker that moves less than this, in document units, is a click: nothing moves.
-const MOVED: f64 = 0.5;
-
 /// The family's state between passes, kept in `CanvasTools::analysis`.
 pub(crate) struct AnalysisTools {
     ruler: RulerTool,
@@ -214,6 +211,11 @@ fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
+/// The centre of the document pixel that holds `at`, where the Count tool puts a marker (#11761).
+fn pixel_centre(at: [f64; 2]) -> [f64; 2] {
+    [at[0].floor() + 0.5, at[1].floor() + 0.5]
+}
+
 /// The ruler line, the sampler marks, the count markers and the note cards over the document, in the canvas body over
 /// `rect`. The marks show with every tool; the line with its handles only with the Ruler. View › Extras off hides the
 /// line (View › Show has no Ruler entry, #11987) and the sampler marks, whose points and Info readouts stay (#11741).
@@ -290,7 +292,7 @@ enum CountEvent {
 /// The Count tool's state: the marker a drag holds and the events not yet drained.
 #[derive(Debug, Default)]
 pub(crate) struct CountTool {
-    /// The marker being dragged: group, index and where the press was.
+    /// The marker being dragged: group, index and where the marker was at the press.
     moving: Option<(usize, usize, [f64; 2])>,
     events: Vec<CountEvent>,
 }
@@ -335,12 +337,15 @@ impl CanvasTool for CountPass<'_> {
                 ToolAction::Done
             }
             Some((group, index)) => {
-                self.state.moving = Some((group, index, at));
+                let marker =
+                    self.scope.with_app(|app| app.session.active().and_then(|st| st.doc.measurement.count_groups.get(group)?.points.get(index).copied()));
+                let Some(marker) = marker else { return ToolAction::Ignored };
+                self.state.moving = Some((group, index, marker));
                 ToolAction::Claimed
             }
             None => {
                 if !pointer.mods.alt {
-                    self.state.events.push(CountEvent::Add { at });
+                    self.state.events.push(CountEvent::Add { at: pixel_centre(at) });
                 }
                 ToolAction::Done
             }
@@ -351,8 +356,8 @@ impl CanvasTool for CountPass<'_> {
 
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         let Some((group, index, from)) = self.state.moving.take() else { return };
-        // A press and release on one spot moves nothing.
-        if let Some(to) = doc_at(cx, pointer.pos).filter(|to| dist(from, *to) > MOVED) {
+        // A plain click on a marker re-centres it on the clicked pixel too; a marker already there moves nothing.
+        if let Some(to) = doc_at(cx, pointer.pos).map(pixel_centre).filter(|to| *to != from) {
             self.state.events.push(CountEvent::Move { group, index, to });
         }
     }
