@@ -118,15 +118,20 @@ pub fn specs() -> Vec<CommandSpec> {
                 "colorLookup" => Box::leak(params.replace(LOOKUP_LAYER_DEFAULTS, LOOKUP_IMAGE_DEFAULTS).into_boxed_str()),
                 _ => params,
             },
-            // Brightness/Contrast also refuses a hidden pixel layer (#14359).
+            // Brightness/Contrast also refuses a hidden pixel layer (#14359); Black & White is RGB
+            // only and refuses a hidden pixel layer (#14401).
             enabled: match kind {
                 "brightnessContrast" => crate::adjust_cmds::brightness_contrast_enabled,
+                "blackWhite" => crate::adjust_cmds::black_white_enabled,
                 _ => crate::adjust_cmds::has_adjustable,
             },
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
                 if kind == "brightnessContrast" {
                     crate::adjust_cmds::brightness_contrast_empty_refusal(s, p)?;
+                }
+                if kind == "blackWhite" {
+                    crate::adjust_cmds::black_white_empty_refusal(s, p)?;
                 }
                 let filled;
                 let p = if kind == "colorLookup" {
