@@ -80,10 +80,17 @@ fn file_info_keeps_multiline_metadata_on_confirm_and_reopen() {
     }
     confirm(&mut app, &ctx, id).unwrap();
     crate::menus::invoke(&mut app, &ctx, "file.fileInfo", json!({})).unwrap();
-    let id = app.framework.dialogs.stack().top().expect("File Info reopens");
-    let dialog = app.framework.dialogs.get_by_id::<HostedParamDialog>(id).expect("a parameter dialog");
+    assert!(app.framework.dialogs.stack().top().is_some(), "File Info reopens");
+    let (request, _rx) = crate::control::ControlRequest::new("ui.inspect", json!({}));
+    let report = match crate::control::handle(&mut app, &ctx, &request) {
+        crate::control::Reply::Done(report) => report,
+        _ => panic!("File Info inspection completes immediately"),
+    };
+    assert_eq!(report["ok"], true);
+    let dialogs = report["result"]["dialogs"].as_array().expect("reported dialogs");
+    let dialog = dialogs.iter().find(|dialog| dialog["key"] == "file.fileInfo").expect("File Info reports its fields");
     for key in ["description", "copyright"] {
-        assert_eq!(dialog.fields().get(key), Some(&FieldValue::Text("First line\nSecond line".into())), "{key} comes back with its line break");
+        assert_eq!(dialog["fields"][key], json!("First line\nSecond line"), "{key} comes back with its line break");
     }
 }
 
