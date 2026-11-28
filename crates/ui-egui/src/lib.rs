@@ -1015,6 +1015,8 @@ mod hidden_layer_tests;
 mod warp_text_dialog_tests;
 
 #[cfg(test)]
+mod options_bar_brush_size_tests;
+#[cfg(test)]
 mod options_bar_mode_wheel_tests;
 
 #[cfg(test)]
