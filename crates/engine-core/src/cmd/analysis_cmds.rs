@@ -9,7 +9,8 @@
 //! Selection measurements follow Photoshop's definitions: the selection (coverage ≥ 50 %) is
 //! split into 8-connected features, each recorded with a summary row first. Area is the pixel
 //! count, perimeter the length of the marching-squares contour through the pixel-centre grid
-//! (exact along straight edges, √2 per diagonal step), circularity 4π·area/perimeter², gray
+//! (exact along straight edges and around corners that turn the same way as their neighbours, as
+//! a rectangle's do; √2 per one-pixel diagonal step), circularity 4π·area/perimeter², gray
 //! values the luminosity (0.30 R + 0.59 G + 0.11 B) of the composite in the document's value
 //! range (0–255 at 8 bits, 0–32768 at 16 bits, 0–1 at 32 bits), integrated density area × mean.
 //! Lengths and areas are scaled by the measurement scale.
@@ -466,7 +467,35 @@ fn measure_features_impl(mask: &[bool], gray: Option<&[f32]>, w: usize, h: usize
     let n = n as usize;
     // Perimeter: marching squares over the pixel-centre grid (padded with unselected pixels),
     // per row band in parallel, each cell's length attributed to the feature of a pixel in it.
+    // A corner cell turns the contour by 90°. Where the corners at both ends of its straight runs
+    // turn the same way, as all four of a rectangle's do, it is a square pixel corner and counts
+    // the two half edges around it (1). Where a neighbouring corner turns back, it is a step of a
+    // slanted edge or curve and is cut diagonally (√½), so a one-pixel step adds up to √2 (#16495).
     let at = |x: isize, y: isize| -> u32 { if x < 0 || y < 0 || x >= w as isize || y >= h as isize { u32::MAX } else { label[y as usize * w + x as usize] } };
+    // Corners of cell (x, y) that are selected: bit 0 top left, 1 top right, 2 bottom right, 3 bottom left.
+    let cell = |x: isize, y: isize| -> u8 {
+        [at(x, y), at(x + 1, y), at(x + 1, y + 1), at(x, y + 1)].iter().enumerate().fold(0, |m, (i, v)| if *v != u32::MAX { m | 1 << i } else { m })
+    };
+    let straight = |m: u8| matches!(m, 0b0011 | 0b0110 | 0b1100 | 0b1001);
+    // The first cell that is not straight on the contour leaving cell (x, y) by (dx, dy). Straight
+    // cells lie inside the padded grid, so the walk ends there at the latest.
+    let run_end = |mut x: isize, mut y: isize, dx: isize, dy: isize| -> u8 {
+        loop {
+            x += dx;
+            y += dy;
+            let m = cell(x, y);
+            if !straight(m) {
+                return m;
+            }
+        }
+    };
+    // Both runs of corner cell (x, y) end in a corner of the same kind: 1 or 3 selected pixels.
+    let square_corner = |x: isize, y: isize, m: u8| -> bool {
+        let crossed = |a: u8, b: u8| (m >> a & 1) != (m >> b & 1);
+        [((0, 1), (0, -1)), ((1, 2), (1, 0)), ((3, 2), (0, 1)), ((0, 3), (-1, 0))]
+            .iter()
+            .all(|&((a, b), (dx, dy))| !crossed(a, b) || run_end(x, y, dx, dy).count_ones() == m.count_ones())
+    };
     const HALF_DIAG: f64 = std::f64::consts::FRAC_1_SQRT_2;
     let per: Vec<f64> = (-1..h as isize)
         .into_par_iter()
@@ -477,6 +506,7 @@ fn measure_features_impl(mask: &[bool], gray: Option<&[f32]>, w: usize, h: usize
                     let c = [at(x, y), at(x + 1, y), at(x + 1, y + 1), at(x, y + 1)];
                     let inside = c.iter().filter(|v| **v != u32::MAX).count();
                     let len = match inside {
+                        1 | 3 if square_corner(x, y, cell(x, y)) => 1.0,
                         1 | 3 => HALF_DIAG,
                         2 if (c[0] != u32::MAX) == (c[2] != u32::MAX) => 2.0 * HALF_DIAG,
                         2 => 1.0,
