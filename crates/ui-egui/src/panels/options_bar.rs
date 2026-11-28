@@ -6,7 +6,7 @@ use std::ops::RangeInclusive;
 
 use craft::behavior::{EditEvents, IconId, NumberCodec};
 use craft::ui::bars::{Bar, BarHome, BarKind, BarOutput, BarTool};
-use craft::ui::buttons::ToggleButton;
+use craft::ui::buttons::{IconButton, ToggleButton};
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Entry, MemoProps, MemoView, Outbox, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
@@ -100,14 +100,46 @@ pub(crate) fn edit_key(app: &PhotocraftApp) -> (Option<End>, bool) {
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let tool = app.ui.tool;
     let ending = ending(app, tool);
+    // The bar's right end stays for every tool. It reads only copies of the app's state: the body holds the app.
+    let searching = app.ui.palette.open;
+    let mut ends = Vec::new();
     let mut bar = Bar::new(tl!("Options").to_owned(), BarKind::Options);
     if let Some(ending) = &ending {
         bar = bar.commit_cancel(ending.commit.clone(), ending.cancel.clone());
     }
+    bar = bar.trailing(|ui, _| right_end(ui, searching, &mut ends));
     // A value control of the bar takes the wheel without a click, as the Mode dropdown and the fields did.
     let shown = bar.show(ui, |ui, _| with_env(ui, |set| set.wheel = Some(WheelScope::Free), |ui| body(app, ui)));
     if let Some(ending) = ending {
         answer(app, ui, tool, ending.end, &shown.output);
+    }
+    // The bar may run its right end more than once in a pass (it measures it first); one click runs once.
+    if ends.contains(&RightEnd::Search) {
+        run_menu_command(app, ui.ctx(), "edit.search");
+    }
+}
+
+/// What the bar's right end asked for this pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RightEnd {
+    /// The Search button was clicked.
+    Search,
+}
+
+/// The bar's right end: the Search button, which opens and closes the search Edit › Search opens.
+fn right_end(ui: &mut egui::Ui, searching: bool, ends: &mut Vec<RightEnd>) {
+    let tip = tl!("Search for tools, help, and more");
+    let search = IconButton::new(IconId::new("search")).label(tip.to_owned()).tooltip(tip).selected(searching).show(ui);
+    if search.clicked() && !ends.contains(&RightEnd::Search) {
+        ends.push(RightEnd::Search);
+    }
+}
+
+/// Runs menu command `id` as its menu item does; a refusal shows in the status line.
+fn run_menu_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str) {
+    if let Err(e) = crate::menus::invoke(app, ctx, id, json!({})) {
+        app.ui.status = e;
+        app.ui.status_error = true;
     }
 }
 
@@ -437,3 +469,7 @@ mod art_history_bar_controls_tests;
 #[cfg(test)]
 #[path = "../healing_mode_menu_tests.rs"]
 mod healing_mode_menu_tests;
+
+#[cfg(test)]
+#[path = "../options_bar_search_button_tests.rs"]
+mod options_bar_search_button_tests;

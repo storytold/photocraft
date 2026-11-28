@@ -52,6 +52,47 @@ pub struct Panels {
 
 pub use craft::ui::canvas_controls::TaskBarPlace;
 
+/// What the contextual task bar was last shown for (#16758). A bar shown for another context puts an unpinned
+/// place back to automatic placement; a pinned one keeps it. Not saved: it lives for the session.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TaskBarContext {
+    /// No bar shown yet.
+    #[default]
+    None,
+    /// Free Transform's bar for one transform session.
+    Transform { doc: u64, session: u64 },
+    /// The Crop tool's bar for one crop frame: `frame` counts the frames applied or discarded so far.
+    Crop { doc: u64, frame: u64 },
+    /// The Frame tool's bar for one frame layer.
+    Frame { doc: u64, layer: u64 },
+}
+
+/// The contextual task bar's context bookkeeping (#16758), kept out of saved state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TaskBarTrack {
+    /// The context the bar was last shown for.
+    pub context: TaskBarContext,
+    /// The crop frames applied or discarded so far: the next frame is a new context.
+    pub crop_frame: u64,
+    /// A crop was pending when the crop bar last showed.
+    pub crop_pending: bool,
+}
+
+impl UiState {
+    /// The contextual task bar is about to show for `context` (#16758): on a context change an unpinned bar goes back
+    /// to automatic placement (its dragged offset and place are cleared); a pinned bar keeps its place.
+    pub fn enter_task_bar_context(&mut self, context: TaskBarContext) {
+        if self.task_bar_track.context == context {
+            return;
+        }
+        self.task_bar_track.context = context;
+        if !self.panels.task_bar.pinned {
+            self.panels.task_bar.at = None;
+            self.panels.task_bar.offset = None;
+        }
+    }
+}
+
 impl Default for Panels {
     fn default() -> Self {
         Self { options_bar: true, status_bar: true, menu_bar: true, context_task_bar: true, task_bar: TaskBarPlace::default() }
@@ -341,6 +382,9 @@ pub struct UiState {
     /// in points, `None` while no bar shows (`ui.inspect` › `taskBar`).
     #[serde(skip)]
     pub task_bar_shown: Option<[f32; 4]>,
+    /// What the contextual task bar was last shown for (#16758).
+    #[serde(skip)]
+    pub task_bar_track: TaskBarTrack,
     /// Artboard tool (see `artboard_tool`).
     pub artboard_tool: crate::artboard_tool::ArtboardToolUi,
     /// Modifier Keys panel, custom pixel aspect ratios, workspace dialogs (see `workspace_ui`).
@@ -509,6 +553,7 @@ impl Default for UiState {
             web_table: Default::default(),
             frame_tool: Default::default(),
             task_bar_shown: None,
+            task_bar_track: TaskBarTrack::default(),
             artboard_tool: Default::default(),
             shell: Default::default(),
             layer_filter: LayerFilter::default(),
