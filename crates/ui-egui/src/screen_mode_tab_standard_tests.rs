@@ -88,6 +88,15 @@ fn widget_rect(h: &AppHarness, label: &str) -> egui::Rect {
     h.query_by_label(label).unwrap_or_else(|| panic!("{label} is drawn")).rect()
 }
 
+/// The rect of a named shell slot region in the accessibility tree: the bar itself, not a control in it.
+/// A region and its inner wrapper share the name, so take the widest match - the region around the bar.
+fn slot_rect(h: &AppHarness, label: &str) -> egui::Rect {
+    h.query_all_by_label_contains(label)
+        .map(|n| n.rect())
+        .max_by(|a, b| (a.width() * a.height()).total_cmp(&(b.width() * b.height())))
+        .unwrap_or_else(|| panic!("the {label} slot region is drawn"))
+}
+
 /// The Crop tool with its frame open, so the contextual task bar shows.
 fn open_crop_frame(h: &mut AppHarness) {
     invoke_set_tool(h, "crop");
@@ -117,6 +126,8 @@ fn tab_in_standard_hides_only_the_editor_chrome_and_keeps_the_window_chrome() {
     let views = inspect(&mut h)["views"].clone();
     let ruler_on = h.state().ui.extras.rulers;
     let canvas = canvas_rect(&mut h);
+    let options = slot_rect(&h, "Options");
+    let status = slot_rect(&h, "Status");
     let file = widget_rect(&h, "File");
     let zoom = widget_rect(&h, "Zoom");
 
@@ -131,8 +142,13 @@ fn tab_in_standard_hides_only_the_editor_chrome_and_keeps_the_window_chrome() {
     let grown = canvas_rect(&mut h);
     let (c, g) = (canvas.as_array().unwrap(), grown.as_array().unwrap());
     let side = |v: &[Value], i: usize| v[i].as_f64().expect("a canvas edge in points");
-    assert!(side(g, 1) < side(c, 1), "the canvas reaches up into the room the options bar freed");
-    assert_eq!(side(g, 3), side(c, 3), "its bottom stays put: the status bar keeps its room");
+    // The canvas edges follow the freed bars' own rects (all measured from this layout, never a literal):
+    // the pad from an edge to its bar stays the same, so the canvas grew by exactly the bar's rect.
+    let pad_top = side(c, 1) - f64::from(options.max.y);
+    let pad_bottom = f64::from(status.min.y) - side(c, 3);
+    assert!(pad_top >= 0.0 && pad_bottom >= 0.0, "before Tab the canvas sits under the options bar and above the status bar");
+    assert!((side(g, 1) - (f64::from(options.min.y) + pad_top)).abs() < 0.6, "the canvas top reached up by exactly the options bar's own rect");
+    assert!((f64::from(status.min.y) - side(g, 3) - pad_bottom).abs() < 0.6, "the bottom did not move: the status bar keeps exactly its own room");
     assert!(side(g, 2) > side(c, 2), "and it reaches into the room the panel dock freed");
 
     press_tab(&mut h);
@@ -209,4 +225,29 @@ fn the_tab_chrome_toggle_journals_no_history_step() {
     press_tab(&mut h);
     press_tab(&mut h);
     assert_eq!(h.state().session.active().unwrap().history.past_len(), before, "hiding and showing the chrome journals nothing");
+}
+
+#[test]
+fn tab_in_standard_hides_the_free_transform_task_bar_and_tab_again_shows_it() {
+    let mut h = app_window();
+    invoke(&mut h, "view.screenMode.standard");
+    for (command, params) in [
+        ("layer.new.layer", json!({})),
+        ("select.rect", json!({"x": 100.0, "y": 100.0, "width": 100.0, "height": 60.0})),
+        ("edit.fill", json!({"color": "#ff0000"})),
+        ("select.deselect", json!({})),
+    ] {
+        let ctx = h.ctx.clone();
+        let (request, _reply) = ControlRequest::new("engine.execute", json!({"command": command, "params": params}));
+        let Reply::Done(reply) = handle(h.state_mut(), &ctx, &request) else { panic!("engine.execute {command}: expected an immediate reply") };
+        assert_eq!(reply["ok"], true, "{command}: {reply}");
+    }
+    h.run_steps(2);
+    invoke(&mut h, "edit.freeTransform");
+    h.run_steps(3);
+    assert_eq!(inspect(&mut h)["taskBar"]["visible"], json!(true), "the Free Transform box shows the task bar");
+    press_tab(&mut h);
+    assert_eq!(inspect(&mut h)["taskBar"]["visible"], json!(false), "Tab takes it down with the options bar, the tool strip and the dock");
+    press_tab(&mut h);
+    assert_eq!(inspect(&mut h)["taskBar"]["visible"], json!(true), "Tab again brings the box and its bar back");
 }
