@@ -7,7 +7,7 @@ use craft::behavior::kurbo::Size;
 use craft::host::target::WindowState;
 use craft::ui::canvas::ToolHost;
 use craft::ui::contract::{ShowContainer as _, SizeLimits};
-use craft::ui::runtime::windows::WindowHost;
+use craft::ui::runtime::windows::{WindowAction, WindowHost};
 use craft::ui::shell::{DocumentWindow, Title, TitleBar, Wrapped};
 use craft::window::policy::Frame;
 use egui::{Rect, Vec2, vec2};
@@ -65,6 +65,10 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut closed = Vec::new();
     let mut docked = Vec::new();
     let dock_target = app.dock_drop_rect;
+    // Which document each window shows and which container shows it this pass, so the window of the active document
+    // can be found afterwards, and whether a window asked for the keyboard as the app was opening it (#16891).
+    let mut shown_by_window: Vec<(usize, egui::Id)> = Vec::with_capacity(windows.len());
+    let mut the_app_took_the_keyboard = false;
     for (id, rect) in windows {
         let shown = app.ui.document_windows.floating.iter().find(|(g, _)| g.id == id).and_then(|(g, _)| g.shown.or_else(|| g.documents.first().copied()));
         let Some(doc) = shown.and_then(|d| crate::canvas::tabs::document_index(app, d)) else { continue };
@@ -138,9 +142,20 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 super::tabs::close_document(app, ui.ctx(), doc_id);
             }
         }
+        // Whether the app has already seen this window standing without the keyboard: from then on its keyboard came
+        // from the user, whoever opened the window (#16891).
+        let brought_forward = the_user_brought_it_forward(ui.ctx(), id, output.response.id);
         if output.focus_gained && app.session.active_index() != Some(doc) {
-            app.session.set_active(doc);
+            if brought_forward {
+                app.session.set_active(doc);
+            } else {
+                // The keyboard went to a window the app opened itself: that is not a choice of document. The
+                // document that was active when the command ran stays active, and its own window is the one to
+                // bring in front of the run the command opened (#16891).
+                the_app_took_the_keyboard = true;
+            }
         }
+        shown_by_window.push((doc, output.response.id));
         // A window that took the wanted size shows the whole image: centre it. One the work area capped
         // keeps the zoomed spot.
         if output.wrapped == Some(Wrapped::Fits) {
@@ -157,6 +172,18 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     for id in closed {
         close_window(app, id);
     }
+    // A window the app opened took the keyboard as it opened: the document that was active when the command ran is
+    // still the active one, so its own window is the one the system should hold the keyboard in (#16891). The
+    // request goes after the loop, because the window the command opened last is the one that took the keyboard.
+    if the_app_took_the_keyboard {
+        let host = WindowHost::of(ui.ctx());
+        let active = app.session.active_index();
+        if let Some((_, container)) = shown_by_window.iter().find(|(doc, _)| Some(*doc) == active)
+            && let Some(viewport) = host.viewport_of(*container)
+        {
+            host.act(viewport, WindowAction::Focus);
+        }
+    }
     // A window whose title bar was dropped on the main window's tabs goes back into them, its document in front.
     for (id, doc) in docked {
         close_window(app, id);
@@ -164,6 +191,22 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         // The OS window closes in the next pass, the first that no longer shows it; nothing else may ask for one.
         ui.ctx().request_repaint();
     }
+}
+
+/// Whether the floating document window `window` (the container `container`) took the keyboard because the user
+/// brought it forward. The app has to have seen the window standing without the keyboard once for that: a window
+/// that arrives holding it, as every window of Float All in Windows does as it opens, was opened by the app, and
+/// its keyboard is not a choice of document (#16891).
+fn the_user_brought_it_forward(ctx: &egui::Context, window: u64, container: egui::Id) -> bool {
+    let host = WindowHost::of(ctx);
+    // A window the system has told the app nothing about is not yet known to be standing without the keyboard.
+    let standing = host.viewport_of(container).and_then(|viewport| host.facts(viewport)).is_some_and(|facts| !facts.focused);
+    let key = egui::Id::unique(("document window without the keyboard", window));
+    let seen = ctx.data(|d| d.get_temp::<bool>(key)).unwrap_or(false) || standing;
+    if seen {
+        ctx.data_mut(|d| d.insert_temp(key, true));
+    }
+    seen
 }
 
 /// Whether an OS move of the floating window `window` (the container `container`) by its title bar (`bar`, in the
