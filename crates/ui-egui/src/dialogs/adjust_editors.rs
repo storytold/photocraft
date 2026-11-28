@@ -23,9 +23,13 @@ use craft::imaging::ui::adjust::{
 };
 use craft::imaging::ui::histogram::{ChannelColor, HistogramData};
 use craft::theme::Srgba;
-use craft::ui::contract::Bind;
+use craft::ui::contract::{Bind, Entry, Show as _, ShowContainer as _};
+use craft::ui::display::{Shade, Text};
+use craft::ui::layout_components::Row;
+use craft::ui::pickers::Select;
 use craft::ui::runtime::env::Env;
 use craft::ui::runtime::requests::ColorRequest;
+use craft::ui::style::TypeRole;
 use egui::Ui;
 use photocraft_doc::LayerId;
 use photocraft_engine::adjust_params::HUE_RANGES;
@@ -225,6 +229,29 @@ fn reset_legacy_toggle(value: BrightnessContrast, previous_legacy: bool, reset: 
     if reset && value.legacy != previous_legacy { BrightnessContrast::new(0.0, 0.0, value.legacy) } else { value }
 }
 
+/// The Curves Preset menu (#9221) over `curves`, where the presets apply ([`curves_presets::offered`]): it shows the
+/// preset the curves are, or Custom once edited; picking another replaces the curves and returns that edit.
+fn curves_preset_row(ui: &mut Ui, curves: &mut ToneCurves, channels: &ToneChannels) -> Option<EditEvent<AdjustValue>> {
+    if !crate::curves_presets::offered(channels) {
+        return None;
+    }
+    let current = crate::curves_presets::matching(curves, channels).map_or("custom", |p| p.id);
+    let mut entries: Vec<Entry<&'static str>> =
+        crate::curves_presets::available(channels.is_gray()).map(|p| Entry::new(p.id, tl!(p.label).to_owned())).collect();
+    if current == "custom" {
+        entries.push(Entry::new("custom", tl!("Custom").to_owned()));
+    }
+    let mut picked = None;
+    Row::new().show(ui, |ui, _| {
+        Text::new(tl!("Preset:").to_owned()).shade(Shade::Muted).role(TypeRole::Label).show(ui);
+        picked = Select::new(tl!("Preset").to_owned(), Bind::given(current), &entries).show(ui).events.committed().copied();
+    });
+    let preset = crate::curves_presets::find(picked.filter(|id| *id != current)?)?;
+    let from = AdjustValue::Curves { curves: curves.clone() };
+    *curves = crate::curves_presets::curves(preset, channels);
+    Some(EditEvent::set(Mixed::Same(from), AdjustValue::Curves { curves: curves.clone() }, Arc::from("Curves Preset"), None))
+}
+
 /// Shows the editor of `kind` over `value` for one pass.
 fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, cx: &mut AdjustDialogCx<'_>) -> AdjustOut {
     let context = cx.context;
@@ -266,6 +293,8 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
             lifted(out.edit, |levels| AdjustValue::Levels { levels })
         }
         ("curves", AdjustValue::Curves { curves }) => {
+            // The Preset menu (#9221) above the panel: a picked preset replaces the curves as one edit.
+            let preset = curves_preset_row(ui, curves, &setup.channels);
             let mut panel = CurvesPanel::new("Curves", Bind::bound(&mut *curves), setup.channels.clone())
                 .histograms(&setup.histograms)
                 .sampler(values::curve_sampler)
@@ -283,6 +312,9 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
             }
             let out = panel.show(ui);
             let mut edit = out.edit.map(|curves| AdjustValue::Curves { curves });
+            if let Some(event) = preset {
+                edit.push(event);
+            }
             // The panel reports the other mode's icon and leaves the conversion to the engine.
             if let Some(mode) = out.mode {
                 let from = AdjustValue::Curves { curves: curves.clone() };

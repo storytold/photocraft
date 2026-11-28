@@ -235,7 +235,11 @@ fn dialog_rect(h: &Harness<'static, Box<PhotocraftApp>>) -> Option<egui::Rect> {
 /// Read the visible selected labels of the dialog’s channel dropdowns.
 fn names(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<String> {
     let Some(window) = dialog_rect(h) else { return Vec::new() };
-    h.query_all_by_role(egui::accesskit::Role::ComboBox).filter(|n| window.contains_rect(n.rect())).filter_map(|n| n.value()).collect()
+    // The channel menus only: Curves' Preset menu (#9234) is a combo box too.
+    h.query_all_by_role(egui::accesskit::Role::ComboBox)
+        .filter(|n| window.contains_rect(n.rect()) && n.accesskit_node().label().as_deref() != Some("Preset"))
+        .filter_map(|n| n.value())
+        .collect()
 }
 
 /// Type into the actual Levels gamma control and blur it to commit the value.
