@@ -142,7 +142,83 @@ fn safe_gpu_forces_the_cpu_for_one_launch() {
 }
 
 fn cand(vendor: u32, device_type: wgpu::DeviceType, backend: wgpu::Backend) -> Candidate {
-    Candidate { vendor, device_type, backend, surface_ok: true, wanted: false }
+    Candidate { vendor, device_type, backend, surface_ok: true, wanted: false, nvk_gm108: false }
+}
+
+#[test]
+fn nvk_gm108_detection_is_driver_and_architecture_specific() {
+    use wgpu::Backend as B;
+    assert!(nvk_gm108(NVIDIA, B::Vulkan, "NVIDIA GeForce 840M (NVK GM108)", "NVK"));
+    assert!(nvk_gm108(NVIDIA, B::Vulkan, "NVIDIA GeForce MX130 (NVK GM108M)", "nvk"));
+    assert!(!nvk_gm108(NVIDIA, B::Gl, "NVIDIA GeForce 840M (NVK GM108)", "NVK"));
+    assert!(!nvk_gm108(NVIDIA, B::Vulkan, "NVIDIA GeForce 840M (GM108)", "NVIDIA"));
+    assert!(!nvk_gm108(NVIDIA, B::Vulkan, "NVIDIA GeForce GTX 1060 (NVK GP106)", "NVK"));
+    assert!(!nvk_gm108(INTEL, B::Vulkan, "Intel GM108 (NVK)", "NVK"));
+}
+
+#[test]
+fn linux_auto_prefers_a_working_adapter_over_nvk_gm108() {
+    use wgpu::{Backend as B, DeviceType as T};
+    let mut nvk = cand(NVIDIA, T::DiscreteGpu, B::Vulkan);
+    nvk.nvk_gm108 = true;
+    let intel_gl = cand(INTEL, T::IntegratedGpu, B::Gl);
+    let lavapipe = cand(0x10005, T::Cpu, B::Vulkan);
+    let cases = [nvk, intel_gl, lavapipe];
+    assert_eq!(pick(&cases, Auto, Os::Other), Some(0), "without the workaround, discrete NVK wins");
+    assert_eq!(pick_with_nvk_workaround(&cases, Auto, Os::Other, true, wgpu::PowerPreference::HighPerformance), Some((1, true)));
+    assert_eq!(
+        pick_with_nvk_workaround(&cases, Auto, Os::Other, false, wgpu::PowerPreference::HighPerformance),
+        Some((0, false)),
+        "explicit selection stays unchanged"
+    );
+    // An alternative without surface support is not an alternative.
+    let mut unavailable = intel_gl;
+    unavailable.surface_ok = false;
+    assert_eq!(pick_with_nvk_workaround(&[nvk, unavailable], Auto, Os::Other, true, wgpu::PowerPreference::HighPerformance), Some((0, false)));
+    // If the only safe device is software Vulkan, use it instead of the corrupting NVK GPU.
+    assert_eq!(pick_with_nvk_workaround(&[nvk, lavapipe], Auto, Os::Other, true, wgpu::PowerPreference::HighPerformance), Some((1, true)));
+    assert_eq!(pick_with_nvk_workaround(&[nvk], Auto, Os::Other, true, wgpu::PowerPreference::HighPerformance), Some((0, false)));
+    // Without the affected adapter, automatic ranking is completely unchanged.
+    assert_eq!(pick_with_nvk_workaround(&[intel_gl, lavapipe], Auto, Os::Other, true, wgpu::PowerPreference::HighPerformance), Some((0, false)));
+    assert_eq!(pick_with_nvk_workaround(&[], Auto, Os::Other, true, wgpu::PowerPreference::HighPerformance), None);
+}
+
+#[test]
+fn linux_auto_honors_power_preference_without_bypassing_nvk_fallback() {
+    use wgpu::{Backend as B, DeviceType as T, PowerPreference as P};
+    let intel = cand(INTEL, T::IntegratedGpu, B::Gl);
+    let nvidia = cand(NVIDIA, T::DiscreteGpu, B::Vulkan);
+    let adapters = [intel, nvidia];
+
+    // Automatic selection respects low-power requests on unaffected hardware.
+    assert_eq!(pick_with_nvk_workaround(&adapters, Auto, Os::Other, true, P::LowPower), Some((0, false)));
+    assert_eq!(pick_with_nvk_workaround(&adapters, Auto, Os::Other, true, P::HighPerformance), Some((1, false)));
+
+    // A high-performance request still falls back when NVK/GM108 is the preferred GPU.
+    let mut affected = nvidia;
+    affected.nvk_gm108 = true;
+    let affected_adapters = [intel, affected];
+    assert_eq!(pick_with_nvk_workaround(&affected_adapters, Auto, Os::Other, true, P::HighPerformance), Some((0, true)));
+    // With low power the Intel adapter already wins, so no workaround is reported.
+    assert_eq!(pick_with_nvk_workaround(&affected_adapters, Auto, Os::Other, true, P::LowPower), Some((0, false)));
+}
+
+#[test]
+fn nvk_workaround_is_disabled_by_explicit_backend_and_adapter_choices() {
+    let auto = plan(Auto, None, None, false, Os::Other);
+    assert!(linux_auto_nvk_workaround(&auto, Os::Other, None, true));
+    assert!(!linux_auto_nvk_workaround(&auto, Os::Other, Some("nvidia"), true));
+    assert!(!linux_auto_nvk_workaround(&auto, Os::Windows, None, true));
+    assert!(!linux_auto_nvk_workaround(&auto, Os::Other, None, false));
+    for p in [
+        plan(Vulkan, None, None, false, Os::Other),
+        plan(Gl, None, None, false, Os::Other),
+        plan(Auto, None, Some("vulkan"), false, Os::Other),
+        plan(Auto, None, None, true, Os::Other),
+        plan_with_mode(Auto, RenderingMode::Cpu, None, None, false, Os::Other),
+    ] {
+        assert!(!linux_auto_nvk_workaround(&p, Os::Other, None, true), "{p:?}");
+    }
 }
 
 #[test]

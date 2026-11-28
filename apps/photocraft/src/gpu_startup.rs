@@ -35,6 +35,8 @@ use serde_json::{Value, json};
 pub const MARKER_FILE: &str = "gpu-starting.json";
 /// PCI vendor id of Intel.
 pub const INTEL: u32 = 0x8086;
+/// PCI vendor id of NVIDIA.
+pub const NVIDIA: u32 = 0x10de;
 /// Qualcomm's vendor id as its Vulkan driver reports it.
 pub const QUALCOMM: u32 = 0x5143;
 /// Qualcomm's vendor id as DXGI (DX12) reports it: "QCOM".
@@ -270,15 +272,28 @@ pub struct Candidate {
     pub surface_ok: bool,
     /// Its name matches the adapter the user asked for ([`adapter_matches`]).
     pub wanted: bool,
+    /// This Vulkan adapter uses NVK on the GM108 GPU family, which can corrupt egui UI textures.
+    pub nvk_gm108: bool,
 }
 
-/// Rank of an adapter (lower is better): high-performance device types first (egui's power
-/// preference) or software adapters first for `cpu`; then backends, with DX12 before Vulkan for
+/// Narrow Linux compatibility workaround for reproducible UI corruption on NVK/GM108 (#481).
+/// Match both NVIDIA's PCI vendor and the *Vulkan* NVK driver; don't disable Vulkan on other
+/// NVIDIA cards, Nouveau's GL backend, or a proprietary NVIDIA Vulkan driver.
+fn nvk_gm108(vendor: u32, backend: wgpu::Backend, name: &str, driver: &str) -> bool {
+    vendor == NVIDIA
+        && backend == wgpu::Backend::Vulkan
+        && name.to_ascii_lowercase().contains("gm108")
+        && (driver.to_ascii_lowercase().contains("nvk") || name.to_ascii_lowercase().contains("nvk"))
+}
+
+/// Rank of an adapter (lower is better): high-performance device types first by default,
+/// integrated GPUs first in low-power automatic mode, or software adapters first for `cpu`;
+/// then backends, with DX12 before Vulkan for
 /// Intel and Qualcomm on Windows ([`dx12_first_on_windows`]). For `cpu`, any GL adapter comes
 /// before Vulkan, which is only the fallback for presenting the window (see [`backends`]). On
 /// Windows GL comes after every other adapter, WARP included: GL there (VMware's SVGA3D, GL-only
 /// old GPUs) drew a black window (#5191, #1788).
-fn rank(a: &Candidate, backend: GpuBackend, os: Os) -> (u8, u8, u8) {
+fn rank(a: &Candidate, backend: GpuBackend, os: Os, power: wgpu::PowerPreference) -> (u8, u8, u8) {
     let fallback = u8::from((backend == GpuBackend::Cpu && a.backend == wgpu::Backend::Vulkan) || (os == Os::Windows && a.backend == wgpu::Backend::Gl));
     let ty = match a.device_type {
         wgpu::DeviceType::DiscreteGpu => 0,
@@ -291,6 +306,15 @@ fn rank(a: &Candidate, backend: GpuBackend, os: Os) -> (u8, u8, u8) {
         (GpuBackend::Cpu, wgpu::DeviceType::Cpu) => 0,
         (GpuBackend::Cpu, _) => ty + 1,
         _ => ty,
+    };
+    let ty = if backend == GpuBackend::Auto && power == wgpu::PowerPreference::LowPower {
+        match a.device_type {
+            wgpu::DeviceType::IntegratedGpu => 0,
+            wgpu::DeviceType::DiscreteGpu => 1,
+            _ => ty,
+        }
+    } else {
+        ty
     };
     let be = match a.backend {
         wgpu::Backend::Dx12 if os == Os::Windows && dx12_first_on_windows(a.vendor).is_some() => 0,
@@ -306,9 +330,41 @@ fn rank(a: &Candidate, backend: GpuBackend, os: Os) -> (u8, u8, u8) {
 /// win over the rest when any of them can present; otherwise the ranking decides (see
 /// [`wanted_missed`]).
 pub fn pick(adapters: &[Candidate], backend: GpuBackend, os: Os) -> Option<usize> {
+    pick_with_power(adapters, backend, os, wgpu::PowerPreference::HighPerformance)
+}
+
+/// Use the configured power preference when the automatic Linux selector takes over from wgpu.
+fn pick_with_power(adapters: &[Candidate], backend: GpuBackend, os: Os, power: wgpu::PowerPreference) -> Option<usize> {
     let usable = |a: &&Candidate| a.surface_ok;
     let any_wanted = adapters.iter().filter(usable).any(|a| a.wanted);
-    adapters.iter().enumerate().filter(|(_, a)| a.surface_ok && (a.wanted || !any_wanted)).min_by_key(|(i, a)| (rank(a, backend, os), *i)).map(|(i, _)| i)
+    adapters
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.surface_ok && (a.wanted || !any_wanted))
+        .min_by_key(|(i, a)| (rank(a, backend, os, power), *i))
+        .map(|(i, _)| i)
+}
+
+/// Apply the NVK/GM108 workaround only for automatic selection on Linux. Explicit backend
+/// (including WGPU_BACKEND), adapter, and CPU choices must retain their normal semantics.
+fn linux_auto_nvk_workaround(plan: &Plan, os: Os, wanted: Option<&str>, linux: bool) -> bool {
+    linux && os == Os::Other && plan.backend == GpuBackend::Auto && plan.env.is_none() && wanted.is_none()
+}
+
+/// Preserve the normal ranked choice unless it is an NVK/GM108 Vulkan adapter *and* there is
+/// another surface-compatible adapter. Never replace it with an adapter that cannot present.
+fn pick_with_nvk_workaround(adapters: &[Candidate], backend: GpuBackend, os: Os, enabled: bool, power: wgpu::PowerPreference) -> Option<(usize, bool)> {
+    let first = pick_with_power(adapters, backend, os, power)?;
+    if !enabled || !adapters[first].nvk_gm108 {
+        return Some((first, false));
+    }
+    adapters
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.surface_ok && !a.nvk_gm108)
+        .min_by_key(|(i, a)| (rank(a, backend, os, power), *i))
+        .map(|(i, _)| (i, true))
+        .or(Some((first, false)))
 }
 
 /// Whether an adapter called `name` is the one the user asked for: `wanted` is a case-insensitive
@@ -390,9 +446,18 @@ pub fn configure(setup: &mut egui_wgpu::WgpuSetup, plan: &Plan, os: Os, wanted: 
         }
         let vulkan_left_out = without_vulkan.is_some();
         let wanted = applicable_adapter(wanted, plan.backend, ADAPTER_CHOICE);
-        let select = wanted.is_some() || (plan.env.is_none() && (plan.backend == GpuBackend::Cpu || (plan.backend == GpuBackend::Auto && os == Os::Windows)));
+        let linux_auto_nvk = linux_auto_nvk_workaround(plan, os, wanted.as_deref(), ADAPTER_CHOICE);
+        // On Linux enumerate all usable adapters in automatic mode; GL must be available as a
+        // fallback when the preferred Vulkan adapter is the affected NVK/GM108 implementation.
+        if linux_auto_nvk {
+            create.instance_descriptor.backends |= wgpu::Backends::GL;
+        }
+        let select = wanted.is_some()
+            || linux_auto_nvk
+            || (plan.env.is_none() && (plan.backend == GpuBackend::Cpu || (plan.backend == GpuBackend::Auto && os == Os::Windows)));
         if select {
             let backend = plan.backend;
+            let power = create.power_preference;
             create.native_adapter_selector = Some(Arc::new(move |adapters: &[wgpu::Adapter], surface: Option<&wgpu::Surface<'_>>| {
                 let cands: Vec<Candidate> = adapters
                     .iter()
@@ -404,10 +469,21 @@ pub fn configure(setup: &mut egui_wgpu::WgpuSetup, plan: &Plan, os: Os, wanted: 
                             backend: i.backend,
                             surface_ok: surface.is_none_or(|s| a.is_surface_supported(s)),
                             wanted: wanted.as_deref().is_some_and(|w| adapter_matches(&i.name, w)),
+                            nvk_gm108: nvk_gm108(i.vendor, i.backend, &i.name, &i.driver),
                         }
                     })
                     .collect();
-                let i = pick(&cands, backend, os).ok_or_else(|| "no graphics adapter found".to_string())?;
+                let (i, nvk_avoided) =
+                    pick_with_nvk_workaround(&cands, backend, os, linux_auto_nvk, power).ok_or_else(|| "no graphics adapter found".to_string())?;
+                if nvk_avoided {
+                    let selected = adapters[i].get_info();
+                    let message = format!(
+                        "NVK GM108 Vulkan compatibility: automatically using {} ({:?}) instead; select Vulkan or an adapter explicitly to override",
+                        selected.name, selected.backend
+                    );
+                    log::warn!("{message}");
+                    *note.lock().unwrap_or_else(PoisonError::into_inner) = Some(message);
+                }
                 if let Some(w) = wanted.as_deref().filter(|_| wanted_missed(&cands, wanted.as_deref())) {
                     *note.lock().unwrap_or_else(PoisonError::into_inner) =
                         Some(format!("No graphics adapter named \"{w}\" can draw the window; using the automatic choice"));
