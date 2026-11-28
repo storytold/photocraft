@@ -1110,6 +1110,8 @@ mod reset_tip_tests;
 #[cfg(test)]
 mod rotate_steps_tests;
 #[cfg(test)]
+mod window_options_toggle_tests;
+#[cfg(test)]
 mod zoom_mode_tests;
 
 #[cfg(test)]
