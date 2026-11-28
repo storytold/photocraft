@@ -192,6 +192,18 @@ pub(super) fn rules(ctx: &egui::Context) -> Vec<SettingRule> {
     // The pause that bundles arrow-key nudges means nothing with Bundle Arrow-Key Nudges off.
     tweak(&mut rules, "tools.nudgeBundlePauseMs", |r| r.shown_when("tools.bundleNudges", "true"));
 
+    // Preferences > Cursors: the reference application's tooltip under the row, word for word from its measured page
+    // (#16833); the window translates it under `setting.<path>.help` and falls back to this English. Only the rows the
+    // page has today: Painting and Other each stand for several reference radio buttons, and Brush Tip Outline, No
+    // Cursor While Painting and the Brush Leash rows have no setting yet, so their sentences wait with those items.
+    for (path, tooltip) in [
+        ("cursors.showCrosshairInBrushTip", "Always show crosshair in center of brush cursor"),
+        ("cursors.showOnlyCrosshairWhilePainting", "Switch to only a crosshair while painting to improve performance with large brushes"),
+        ("cursors.brushPreviewColor", "Color to use for brush editing preview"),
+    ] {
+        tweak(&mut rules, path, |r| r.help(tooltip));
+    }
+
     rules.into_values().collect()
 }
 

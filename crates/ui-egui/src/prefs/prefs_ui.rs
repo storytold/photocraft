@@ -79,6 +79,8 @@ pub(crate) use startup::{on_recovery_event, remember_rulers};
 #[cfg(test)]
 mod agents_tests;
 #[cfg(test)]
+mod cursors_tooltips_tests;
+#[cfg(test)]
 mod recovery_tests;
 
 #[cfg(test)]
