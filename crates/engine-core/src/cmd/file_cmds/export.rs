@@ -6,6 +6,10 @@ use super::{ColorMode, Document, EngineError, Layer, LayerContent, LayerId, Rect
 #[path = "layers_to_files_index_tests.rs"]
 mod layers_to_files_index_tests;
 
+#[cfg(test)]
+#[path = "layers_to_files_tif_tests.rs"]
+mod layers_to_files_tif_tests;
+
 // ---------- Export ----------
 
 /// Layers to Files requires another layer when the document only contains a Background.
@@ -57,6 +61,7 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
     if format.is_empty() || !format.chars().all(|c| c.is_ascii_alphanumeric()) {
         return Err(EngineError::BadParams { cmd: cmd.into(), msg: "`format` must be a file extension such as png".into() });
     }
+    let format = if format == "tiff" { "tif" } else { format.as_str() };
     let trim = p.get("trim").and_then(Value::as_bool).unwrap_or(false);
     let visible_only = p.get("visibleOnly").and_then(Value::as_bool).unwrap_or(true);
     // Callers outside `Session::execute` (headless workspace exports) carry the session's gate
