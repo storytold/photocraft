@@ -1,8 +1,10 @@
 use craft::behavior::canvas::ZoomScheme;
+use craft::behavior::placement::{cascade, cascade_rects};
 use craft::ui::docking::{ArrangeCommands, ArrangeSpace, Arranged, arrange as run_arrange};
 use photocraft_doc::DocId;
 
 use super::{PhotocraftApp, Value, json};
+use crate::canvas::document_windows::initial_size;
 
 /// Window › Arrange ids (`window.arrange.<name>`) and the framework command each runs: the one table that says which
 /// ids exist.
@@ -50,8 +52,7 @@ fn screen_position(v: &Value) -> Option<[f32; 2]> {
     Some([n(0)?, n(1)?])
 }
 
-/// The area and sizes the framework's arrangements work in: the document area, not the app's whole content. New
-/// windows take half of it; a window that follows its document's size is resized by `DocumentWindow` afterwards.
+/// The document area and the default size of windows in a cascade.
 pub(super) fn space(app: &PhotocraftApp) -> ArrangeSpace<DocId> {
     let area = app.last_canvas_rect;
     let step = craft::ui::style::StyleCx::with_root(app.ctx(), |cx| cx.tokens.size.window.cascade);
@@ -66,8 +67,27 @@ pub(super) fn arrange(app: &mut PhotocraftApp, k: &str, p: &Value) -> Result<Val
     if matches!(command, ArrangeCommands::FloatInWindow) && (given("document") || given("position")) {
         return float_in_window(app, p);
     }
-    let space = space(app);
+    let mut space = space(app);
+    let pixels_per_point = app.ctx().pixels_per_point();
+    if matches!(command, ArrangeCommands::FloatInWindow | ArrangeCommands::NewWindowForDocument)
+        && let Some(st) = app.session.active()
+    {
+        space.size = initial_size(st.doc.size, space.area.size(), pixels_per_point);
+    }
     let arranged = run_arrange(&mut app.ui.document_windows, command, &space);
+    if matches!(command, ArrangeCommands::FloatAllInWindows) {
+        // The shared arrangement selects and orders the windows. Cascade them again with each document's size.
+        let documents = app.session.documents();
+        let mut previous = None;
+        for (group, rect) in &mut app.ui.document_windows.floating {
+            let size = documents
+                .iter()
+                .find(|st| Some(st.doc.id) == group.shown)
+                .map_or(space.size, |st| initial_size(st.doc.size, space.area.size(), pixels_per_point));
+            *rect = previous.map_or_else(|| egui::Rect::from_min_size(space.area.min, size), |prior| cascade(prior, size, space.area, space.step));
+            previous = Some(*rect);
+        }
+    }
     crate::canvas::document_area::apply_arranged(app, arranged);
     if matches!(command, ArrangeCommands::NewWindowForDocument) {
         keep_own_view(app);
@@ -92,32 +112,31 @@ fn keep_own_view(app: &mut PhotocraftApp) {
 /// Float in Window for a given document (default the active one) and screen position (`[x, y]` in points, default the
 /// next cascade slot): dragging a tab off the tab strip uses both. A document alone in a floating window keeps it.
 fn float_in_window(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
-    let doc = match p.get("document") {
-        None | Some(Value::Null) => app.session.active().ok_or("no document")?.doc.id,
+    let idx = match p.get("document") {
+        None | Some(Value::Null) => app.session.active_index().ok_or("no document")?,
 
         Some(v) => serde_json::from_value::<DocId>(v.clone())
             .ok()
-            .filter(|id| app.session.documents().iter().any(|st| st.doc.id == *id))
+            .and_then(|id| crate::canvas::tabs::document_index(app, id))
             .ok_or("document must be the id of an open document")?,
     };
+    let doc = &app.session.documents()[idx].doc;
+    let (id, dimensions) = (doc.id, doc.size);
     let position = match p.get("position") {
         None | Some(Value::Null) => None,
         Some(v) => Some(screen_position(v).ok_or("position must be [x, y] in points")?),
     };
     let space = space(app);
     // A document alone in a floating window keeps the window where it is.
-    let kept = app.ui.document_windows.floating.iter().find(|(group, _)| group.documents == [doc]).map(|(_, rect)| rect.min);
+    let kept = app.ui.document_windows.floating.iter().find(|(group, _)| group.documents == [id]).map(|(_, rect)| *rect);
+    let size = kept.map_or_else(|| initial_size(dimensions, space.area.size(), app.ctx().pixels_per_point()), |rect| rect.size());
     let min = match (position, kept) {
         (Some([x, y]), _) => egui::pos2(x, y),
-        (None, Some(min)) => min,
-        (None, None) => craft::behavior::placement::cascade_rects(space.area, space.size, app.ui.document_windows.floating.len() + 1, space.step)
-            .pop()
-            .map_or(space.area.min, |r| r.min),
+        (None, Some(rect)) => rect.min,
+        (None, None) => cascade_rects(space.area, size, app.ui.document_windows.floating.len() + 1, space.step).pop().map_or(space.area.min, |r| r.min),
     };
-    let window = app.ui.document_windows.float(&doc, egui::Rect::from_min_size(min, space.size)).ok_or("the document is in no window")?;
-    if let Some(i) = app.session.documents().iter().position(|st| st.doc.id == doc) {
-        app.session.set_active(i);
-    }
+    let window = app.ui.document_windows.float(&id, egui::Rect::from_min_size(min, size)).ok_or("the document is in no window")?;
+    app.session.set_active(idx);
     Ok(json!({"window": window}))
 }
 

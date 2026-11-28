@@ -763,6 +763,39 @@ fn float_all_in_windows_gives_each_document_its_own_view() {
 }
 
 #[test]
+fn new_floating_windows_follow_their_document_proportions() {
+    let (mut app, ctx) = app_with(0);
+    let area = egui::Rect::from_min_size(egui::pos2(40.0, 60.0), egui::vec2(1200.0, 600.0));
+    app.last_canvas_rect = area;
+    app.session.edit_prefs(|p| p.workspace.open_documents_as_tabs = false);
+    app.run("file.new", json!({"width": 100, "height": 100})).unwrap();
+    let (group, square) = &app.ui.document_windows.floating[0];
+    assert!((square.width() - square.height()).abs() < 1.0, "the small square image opened in {square:?}");
+    let square_id = group.documents[0];
+    let square_window = group.id;
+
+    app.session.edit_prefs(|p| p.workspace.open_documents_as_tabs = true);
+    app.run("file.new", json!({"width": 400, "height": 800})).unwrap();
+    let portrait_id = app.session.active().unwrap().doc.id;
+    menu(&mut app, &ctx, "window.arrange.newWindowForDocument", json!({})).unwrap();
+    let (_, portrait) = app.ui.document_windows.floating.last().unwrap();
+    assert!((portrait.width() * 2.0 - portrait.height()).abs() < 1.0, "the portrait image opened in {portrait:?}");
+    assert!(area.contains_rect(*portrait));
+
+    menu(&mut app, &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    for (group, rect) in &app.ui.document_windows.floating {
+        if group.documents == [square_id] {
+            assert_eq!(group.id, square_window);
+            assert!((rect.width() - rect.height()).abs() < 1.0);
+        } else {
+            assert_eq!(group.documents, [portrait_id]);
+            assert!((rect.width() * 2.0 - rect.height()).abs() < 1.0);
+        }
+        assert!(area.contains_rect(*rect));
+    }
+}
+
+#[test]
 fn save_selection_opens_its_dialog_and_saves_on_confirm() {
     // #3713: Select › Save Selection… asks for the channel, name and operation first.
     let (mut app, ctx) = app_with(1);
