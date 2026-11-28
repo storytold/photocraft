@@ -758,8 +758,8 @@ fn scale_effects(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Dragging a layer's fx onto another layer in the Layers panel: all its effects (or just the one
 /// at `effect`) move there, or with `copy` are copied. Moving all effects replaces the target's
-/// style, as pasting a layer style does; a single effect replaces the target's effect of the same
-/// kind, else is added.
+/// style, as pasting a layer style does. A single effect is added to the target's; for a kind a
+/// layer holds only one of, it replaces the target's effect of that kind (#16909).
 fn transfer_effects(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "layer.layerStyle.transferEffects";
     let id_of = |key: &str| p.get(key).and_then(Value::as_u64).map(LayerId).ok_or_else(|| bad(CMD, format!("`{key}` must be a layer id")));
@@ -793,7 +793,16 @@ fn transfer_effects(s: &mut Session, p: &Value) -> Result<Value> {
         if index.is_some() {
             dst.effects.enabled = true;
             for e in payload.items {
-                let same = dst.effects.items.iter().position(|x| std::mem::discriminant(x) == std::mem::discriminant(&e));
+                // A new stroke stops at ten, as `layer.layerStyle.stroke` with `add` does (#15140).
+                let is_stroke = |x: &Effect| matches!(x, Effect::Stroke(_));
+                if is_stroke(&e) && dst.effects.items.iter().filter(|x| is_stroke(x)).count() >= crate::layer_style::MAX_STROKES {
+                    return Err(bad(CMD, format!("a layer takes at most {} strokes", crate::layer_style::MAX_STROKES)));
+                }
+                let same = if crate::layer_style::allows_several(&e) {
+                    None
+                } else {
+                    dst.effects.items.iter().position(|x| std::mem::discriminant(x) == std::mem::discriminant(&e))
+                };
                 match same.and_then(|i| dst.effects.items.get_mut(i)) {
                     Some(slot) => *slot = e,
                     None => dst.effects.items.push(e),

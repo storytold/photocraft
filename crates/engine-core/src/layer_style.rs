@@ -1012,6 +1012,13 @@ pub fn kind_of(e: &Effect) -> &'static str {
 fn same_kind(a: &Effect, b: &Effect) -> bool {
     std::mem::discriminant(a) == std::mem::discriminant(b)
 }
+
+/// Kinds a layer can hold several of, as the Layer Style dialog's "+" adds them (PSD keeps them
+/// in a `…Multi` list). The other kinds have one instance per layer.
+pub(crate) fn allows_several(e: &Effect) -> bool {
+    matches!(e, Effect::Stroke(_) | Effect::DropShadow(_) | Effect::InnerShadow(_) | Effect::ColorOverlay { .. } | Effect::GradientOverlay { .. })
+}
+
 /// Upper bound on the effects one `layer.layerStyle.replace` call accepts, so an
 /// automation mistake can't ask for an unbounded document change.
 const MAX_EFFECTS: usize = 256;
