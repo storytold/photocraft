@@ -66,7 +66,7 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             // What Monitor Profile resolves to, so a fallback to sRGB is visible (#569): read the displays again now. The
             // dialog draws the line from the note's cell, which `read_now` fills before the dialog's first frame.
             crate::monitor_status::read_now(app);
-            dialog(crate::filter_dialog::open(app, "edit.colorSettings"))
+            dialog(crate::dialogs::color_settings_dialog::open(app))
         }
         "edit.findAndReplaceText"
             if app

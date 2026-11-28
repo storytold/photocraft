@@ -20,7 +20,7 @@ use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
 
-pub(super) const COMMAND: &str = "edit.colorSettings";
+pub(crate) const COMMAND: &str = "edit.colorSettings";
 const KEY: &str = "preset";
 /// The menu's greyed group label: never a value.
 const OTHER: &str = "Other";
@@ -45,7 +45,7 @@ fn entry_of(value: Option<&str>) -> String {
 
 /// The Settings row, in place of the spec's plain choice: Custom, the greyed Other label and the
 /// named setups in their groups.
-pub(super) fn row(label: Label) -> Param {
+pub(crate) fn row(label: Label) -> Param {
     let name = label.clone();
     Param::custom(KEY, label, move |ui, fields, _| {
         let mut entries = Vec::new();
@@ -69,7 +69,7 @@ pub(super) fn row(label: Label) -> Param {
 /// a value typed or stepped into it checks the box. A value typed out of range is held to the
 /// closest end with the range alert, written with the field's two decimals, which [`reconcile`]
 /// opens; an emptied field puts its value back.
-pub(super) fn text_gamma_rows(list: &mut Vec<Param>) {
+pub(crate) fn text_gamma_rows(list: &mut Vec<Param>) {
     list.retain(|p| p.key != GAMMA_ON);
     let Some(at) = list.iter().position(|p| p.key == GAMMA) else { return };
     let (min, max) = (f64::from(MIN_TEXT_GAMMA), f64::from(photocraft_compose::psblend::MAX_TEXT_GAMMA));

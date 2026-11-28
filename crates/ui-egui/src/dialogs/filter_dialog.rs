@@ -28,8 +28,11 @@ use crate::PhotocraftApp;
 
 mod color_settings_presets;
 mod rows;
-pub(crate) use color_settings_presets::reconcile as reconcile_color_settings;
-pub(crate) use rows::{REPLACE_COLOR, replace_color_sample};
+pub(crate) use color_settings_presets::{
+    COMMAND as COLOR_SETTINGS_COMMAND, reconcile as reconcile_color_settings, row as color_settings_preset_row,
+    text_gamma_rows as color_settings_text_gamma_rows,
+};
+pub(crate) use rows::{REPLACE_COLOR, installed_choices as installed_profile_choices, replace_color_sample};
 
 const MATCH_COLOR: &str = "image.adjustments.matchColor";
 const SCALE_EFFECTS: &str = "layer.layerStyle.scaleEffects";
@@ -385,19 +388,6 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
         list = super::auto_align_ui::params(app);
     }
     rows::custom_rows(app, command, &mut list);
-    if command == color_settings_presets::COMMAND {
-        // The Settings menu: Custom, a greyed group label and the named setups in groups (#14229).
-        if let Some(p) = list.iter_mut().find(|p| p.key == "preset") {
-            *p = color_settings_presets::row(Label::from(tl!("Settings")));
-        }
-        color_settings_presets::text_gamma_rows(&mut list);
-        // The monitor line under the rows: the cell holds the text each frame refreshes, which the build closure cannot read from the app.
-        let note = crate::monitor_status::note_cell(app);
-        list.push(craft::ui::patterns::form_dialogs::Param::custom("monitorNote", craft::ui::runtime::env::Label::Empty, move |ui, _, _| {
-            let text = note.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
-            ui.label(text)
-        }));
-    }
     list
 }
 
@@ -430,7 +420,7 @@ fn scale_effects_row(p: Param) -> Param {
 /// reset restores them too (through [`reset_values`]).
 pub(crate) fn fields(app: &PhotocraftApp, command: &str, params: &[Param]) -> DialogFields {
     let mut fields = DialogFields::new();
-    overlay(params, &command_defaults(app, command, params), &mut fields);
+    overlay(params, &command_defaults(app, command), &mut fields);
     // Replace Color starts from the foreground colour.
     if command == rows::REPLACE_COLOR {
         let fg = app.session.tools.foreground;
@@ -452,7 +442,7 @@ pub(crate) fn fields(app: &PhotocraftApp, command: &str, params: &[Param]) -> Di
 }
 
 /// Command-specific open defaults (ruler straighten, warp from layer, …), as JSON by parameter key.
-fn command_defaults(app: &PhotocraftApp, command: &str, params: &[Param]) -> Map<String, Value> {
+fn command_defaults(app: &PhotocraftApp, command: &str) -> Map<String, Value> {
     let mut map = Map::new();
     if command == "image.rotation.arbitrary" {
         straighten_defaults(app, &mut map);
@@ -484,11 +474,6 @@ fn command_defaults(app: &PhotocraftApp, command: &str, params: &[Param]) -> Map
     }
     if command == "view.proofSetup" {
         proof_setup_defaults(app, &mut map);
-    }
-    if command == "edit.colorSettings"
-        && let Ok(Value::Object(current)) = serde_json::to_value(&app.session.color().settings)
-    {
-        map.extend(current.into_iter().filter(|(key, _)| params.iter().any(|p| p.key == *key)));
     }
     map
 }
