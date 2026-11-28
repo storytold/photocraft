@@ -182,11 +182,10 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
             scale: [(dpi / 72.0) as f32; 2],
             size: Some([width, height]),
             offset: [0.0, 0.0],
-            // PDF pages composite onto white, as every PDF viewer and the previous importer did.
-            // craft-pdf returns premultiplied RGBA8; an opaque background makes alpha 1, so the
-            // bytes below can be written as straight alpha. A transparent background would need
-            // un-premultiplying (dividing each colour by alpha) first.
-            background: [255, 255, 255, 255],
+            // Transparent, like the reference application's PDF import: areas the page paints
+            // nothing on stay clear (#15407). craft-pdf returns premultiplied RGBA8, which the
+            // band conversion below un-premultiplies.
+            background: [0, 0, 0, 0],
             color_replacement: None,
             // craft-pdf's own default: up to 2^31 coverage values per page.
             max_coverage: None,
@@ -219,13 +218,15 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
         for (band, rows) in bytes.chunks(band_bytes).enumerate() {
             ctl.check().map_err(|_| IoError::Cancelled)?;
             data.clear();
-            data.extend(rows.iter().map(|&value| f32::from(value) / 255.0));
+            data.extend(rows.chunks_exact(4).flat_map(straight_rgba));
             let top = (band * BAND_ROWS) as i32;
             let band_height = (rows.len() / row_bytes) as u32;
             surface.write_region(Rect::from_xywh(x as i32, top, width, band_height), &data);
         }
         let layer = Layer::new(format!("Page {page_number}"), LayerContent::Raster(surface));
-        let group = Group { children: vec![layer], expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
+        // A transparent board, so the page's clear areas aren't painted white under it.
+        let artboard = Artboard { background: photocraft_doc::ArtboardBackground::Transparent, ..Artboard::new(rect) };
+        let group = Group { children: vec![layer], expanded: true, artboard: Some(artboard), frame_stroke: None };
         doc.layers.push(Layer::new(format!("Page {page_number}"), LayerContent::Group(group)));
         x = x.saturating_add(width).saturating_add(GAP);
         ctl.progress((index + 1) as f32 / count as f32);
@@ -236,6 +237,17 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
     }
 
     Ok(ImportResult { warnings, document: doc, source_read_only: false, preview_only: false })
+}
+
+/// One premultiplied RGBA8 pixel from craft-pdf as straight-alpha floats in 0..=1. A fully clear
+/// pixel has no colour to recover and becomes clear black.
+fn straight_rgba(px: &[u8]) -> [f32; 4] {
+    let a = f32::from(px[3]) / 255.0;
+    if a == 0.0 {
+        return [0.0; 4];
+    }
+    let c = |v: u8| (f32::from(v) / 255.0 / a).min(1.0);
+    [c(px[0]), c(px[1]), c(px[2]), a]
 }
 
 /// Renders one page, forwarding `ctl`'s cancellation to craft-pdf while it interprets content.
@@ -345,6 +357,19 @@ mod tests {
     use lopdf::{Document as PdfDocument, Object, Stream, dictionary};
 
     use super::*;
+
+    /// #15407: craft-pdf's premultiplied pixels become straight alpha, so a half-covered edge
+    /// keeps its colour instead of darkening, and clear stays clear.
+    #[test]
+    fn premultiplied_pixels_become_straight_alpha() {
+        assert_eq!(straight_rgba(&[0, 0, 0, 0]), [0.0; 4]);
+        assert_eq!(straight_rgba(&[255, 0, 0, 255]), [1.0, 0.0, 0.0, 1.0]);
+        let [r, g, b, a] = straight_rgba(&[0, 0, 128, 128]);
+        assert_eq!((r, g), (0.0, 0.0));
+        assert!((b - 1.0).abs() < 1e-6, "half-covered blue stays full blue, got {b}");
+        assert!((a - 128.0 / 255.0).abs() < 1e-6);
+        assert!(straight_rgba(&[200, 0, 0, 100])[0] <= 1.0, "colour above alpha is clamped");
+    }
 
     /// A one-page PDF whose content stream is `operators` short strokes: rendering costs time
     /// per operator, not per pixel.
