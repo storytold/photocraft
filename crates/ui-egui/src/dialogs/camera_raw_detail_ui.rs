@@ -1,5 +1,7 @@
 //! Full-resolution refinement of Camera Raw's interactive proxy. Native work is off the
-//! UI thread; only one revision runs at a time, and obsolete results never replace new edits.
+//! UI thread; only one develop runs at a time, and obsolete results never replace new edits.
+//! The source asks for the develop it wants ([`DetailPreview::want`]); the after picture collects
+//! it each pass ([`DetailPreview::refresh`]) and shows it once it is the wanted one.
 use craft::imaging::raw::RawDevelopSettings as CameraRaw;
 use craft::imaging::scopes::ClippingMask;
 #[cfg(test)]
@@ -9,7 +11,6 @@ use egui::{Color32, ColorImage, Context};
 use photocraft_algo::camera_raw::DevelopInputs;
 use photocraft_geom::Rect as PixelRect;
 use photocraft_raster::Surface;
-#[cfg(test)]
 use std::sync::mpsc::TryRecvError;
 use std::sync::{
     Arc,
@@ -26,6 +27,15 @@ pub(crate) enum Coverage {
 
 type DetailResult = Result<(u64, Surface), String>;
 
+/// The develop the source last asked for: its order (the source's develop counter, which changes
+/// with every settings change, unlike the request's revision) and what it runs with.
+struct Wanted {
+    order: u64,
+    params: CameraRaw,
+    inputs: DevelopInputs,
+    ctx: Context,
+}
+
 pub(crate) struct DetailPreview {
     source: Surface,
     /// The open-time dialog's camera tone curve: Shadows, Highlights, Clarity, Texture and Dehaze
@@ -40,7 +50,12 @@ pub(crate) struct DetailPreview {
     failed_revision: Option<u64>,
     /// The clipping mask of `result`'s area, made on first ask and kept with its revision.
     mask: Option<(u64, Arc<ClippingMask>)>,
-    /// Whether `result` is the develop of the revision [`Self::refine`] last ran for.
+    /// The develop of the settings in force; kept while the view needs none, so zooming back in
+    /// does not develop the same settings again.
+    wanted: Option<Wanted>,
+    /// Whether the view shows more pixels than the proxy has, so the wanted develop is shown.
+    active: bool,
+    /// Whether `result` is the wanted develop, so the after picture shows it.
     pub(crate) ready: bool,
 }
 
@@ -63,6 +78,8 @@ impl DetailPreview {
             error: None,
             failed_revision: None,
             mask: None,
+            wanted: None,
+            active: false,
             ready: false,
         }
     }
@@ -71,28 +88,67 @@ impl DetailPreview {
         self.pending.is_some()
     }
 
-    #[cfg(test)]
-    pub(crate) fn poll(&mut self, revision: u64) {
-        let Some((requested_revision, rx)) = &self.pending else { return };
-        let requested_revision = *requested_revision;
+    /// Asks for the develop `order` of `params`: it starts once the running one is done, and the
+    /// after picture shows it once it lands. The same settings keep the develop already wanted: the
+    /// workspace asks again for every pan and zoom, and the refinement covers the whole area.
+    pub(crate) fn want(&mut self, ctx: &Context, order: u64, params: &CameraRaw, inputs: &DevelopInputs) {
+        if !self.wanted.as_ref().is_some_and(|w| w.params == *params && w.inputs == *inputs) {
+            self.wanted = Some(Wanted { order, params: params.clone(), inputs: *inputs, ctx: ctx.clone() });
+        }
+        self.active = true;
+        self.refresh();
+    }
+
+    /// The view needs no refinement: the after picture shows the proxy, and nothing new starts.
+    pub(crate) fn unwant(&mut self) {
+        self.active = false;
+        self.ready = false;
+    }
+
+    /// The order of the develop `result` holds, for the after picture's revision.
+    pub(crate) fn shown(&self) -> Option<u64> {
+        self.result.as_ref().filter(|_| self.ready).map(|(order, _)| *order)
+    }
+
+    /// Collects a finished develop, starts the wanted one when none runs and it is not there yet,
+    /// and says whether the result is the wanted develop.
+    pub(crate) fn refresh(&mut self) {
+        self.poll();
+        let wanted = self.wanted.as_ref().map(|w| w.order);
+        self.ready = self.active && wanted.is_some() && self.result.as_ref().map(|(order, _)| *order) == wanted;
+        if !self.active || self.ready || self.pending.is_some() {
+            return;
+        }
+        if let Some(Wanted { order, params, inputs, ctx }) = self.wanted.take() {
+            self.request(&ctx, order, &params, &inputs);
+            self.wanted = Some(Wanted { order, params, inputs, ctx });
+        }
+    }
+
+    /// Takes a finished develop off the worker: kept when it is the wanted one, dropped when the
+    /// settings moved on while it ran. A failure of the wanted develop is reported and not retried.
+    fn poll(&mut self) {
+        let Some((requested, rx)) = &self.pending else { return };
+        let requested = *requested;
         let result = match rx.try_recv() {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return,
             Err(TryRecvError::Disconnected) => Err("RAW Develop detail preview worker stopped".into()),
         };
         self.pending = None;
+        let wanted = self.wanted.as_ref().map(|w| w.order);
         match result {
-            Ok((r, surface)) if r == revision => {
-                self.result = Some((r, surface));
+            Ok((order, surface)) if Some(order) == wanted => {
+                self.result = Some((order, surface));
                 self.mask = None;
                 self.error = None;
             }
-            Ok(_) => {} // A parameter changed while the worker was developing this revision.
+            Ok(_) => {} // A setting changed while the worker was developing this one.
             Err(e) => {
-                if requested_revision == revision {
+                if Some(requested) == wanted {
                     self.error = Some(e);
                 }
-                self.failed_revision = Some(requested_revision);
+                self.failed_revision = Some(requested);
             }
         }
     }
@@ -164,39 +220,19 @@ impl DetailPreview {
     }
 
     /// Writes the refined develop of `region` (document pixels) into `out`, one texel per `factor`
-    /// pixels each way, as the canvas shows it (sRGBA, premultiplied); transparent where the
-    /// region leaves the refined area. `false` when there is nothing to serve (not refined for the
-    /// current revision, or the part is larger than 16 MP), and the caller then reads the proxy.
-    /// Only the asked part is converted, never the whole image.
+    /// pixels each way, as the canvas shows it (sRGBA, premultiplied): each texel the average of its
+    /// block, transparent where the block leaves the refined area. `false` when the refinement is not
+    /// the wanted develop, and the caller then reads the proxy. Only `out`'s texels are converted, so
+    /// a view of the whole image at Fit is served as well as a 1:1 crop.
     pub(crate) fn read(&self, region: RasterRect, factor: u32, display: &photocraft_engine::display_color::CanvasDisplay, out: &mut ColorImage) -> bool {
         let Some((_, surface)) = self.result.as_ref().filter(|_| self.ready) else { return false };
-        let want = PixelRect::new(region.x0, region.y0, region.x1, region.y1).intersect(&self.area);
-        if want.width() as u64 * want.height() as u64 > 16_777_216 {
-            return false;
-        }
-        out.pixels.fill(Color32::TRANSPARENT);
-        if want.is_empty() {
-            return true;
-        }
-        let src = crop_image(surface, want, display);
-        let factor = i64::from(factor.max(1));
-        let (out_w, out_h) = (out.size[0], out.size[1]);
-        let src_w = src.size[0];
-        for oy in 0..out_h {
-            let y = i64::from(region.y0) + oy as i64 * factor;
-            if y < i64::from(want.y0) || y >= i64::from(want.y1) {
-                continue;
-            }
-            for ox in 0..out_w {
-                let x = i64::from(region.x0) + ox as i64 * factor;
-                if x < i64::from(want.x0) || x >= i64::from(want.x1) {
-                    continue;
-                }
-                let from = (y - i64::from(want.y0)) as usize * src_w + (x - i64::from(want.x0)) as usize;
-                if let (Some(o), Some(s)) = (out.pixels.get_mut(oy * out_w + ox), src.pixels.get(from)) {
-                    *o = *s;
-                }
-            }
+        let [out_w, out_h] = out.size;
+        let area = self.area;
+        let image = display_image(PixelRect::new(0, 0, out_w as i32, out_h as i32), display, |texels, px| {
+            block_averages(surface, area, region, factor, texels, px);
+        });
+        if image.size == out.size {
+            out.pixels = image.pixels;
         }
         true
     }
@@ -336,7 +372,55 @@ fn develop(source: &Surface, curve: Option<&[[f32; 2]]>, area: PixelRect, params
 /// parallel threshold (16K pixels), and small enough that a band's float scratch is 1 MiB.
 const CROP_BAND_PIXELS: usize = 64 * 1024;
 
-/// The visible pixels of `surface`, as the canvas shows them.
+/// The texels `texels` (one per `factor` pixels each way from `region`'s origin) of `surface`'s
+/// `area` into `out`, straight RGBA: each the alpha-weighted average of the pixels of its block that
+/// lie in `area`, transparent where none does. Reads the area's rows once per band.
+fn block_averages(surface: &Surface, area: PixelRect, region: RasterRect, factor: u32, texels: PixelRect, out: &mut [[f32; 4]]) {
+    let f = i64::from(factor.max(1));
+    let tw = texels.width() as usize;
+    out.fill([0.0; 4]);
+    if tw == 0 {
+        return;
+    }
+    // Document columns of the texel row, clipped to the area.
+    let x0 = (i64::from(region.x0) + i64::from(texels.x0) * f).max(i64::from(area.x0));
+    let x1 = (i64::from(region.x0) + i64::from(texels.x1) * f).min(i64::from(area.x1));
+    if x1 <= x0 {
+        return;
+    }
+    let (Ok(x0), Ok(x1)) = (i32::try_from(x0), i32::try_from(x1)) else { return };
+    let mut row = vec![[0.0f32; 4]; (x1 - x0) as usize];
+    let mut sums = vec![[0.0f32; 5]; tw];
+    for (ty, texel_row) in (texels.y0..texels.y1).zip(out.chunks_exact_mut(tw)) {
+        sums.fill([0.0; 5]);
+        let top = i64::from(region.y0) + i64::from(ty) * f;
+        let (y0, y1) = (top.max(i64::from(area.y0)), (top + f).min(i64::from(area.y1)));
+        for y in y0..y1 {
+            let Ok(y) = i32::try_from(y) else { continue };
+            surface.read_rgba_into(PixelRect::new(x0, y, x1, y + 1), &mut row);
+            for (i, p) in row.iter().enumerate() {
+                let x = i64::from(x0) + i as i64;
+                let column = (x - i64::from(region.x0)) / f - i64::from(texels.x0);
+                if let Some(sum) = usize::try_from(column).ok().and_then(|c| sums.get_mut(c)) {
+                    let a = p[3];
+                    sum[0] += p[0] * a;
+                    sum[1] += p[1] * a;
+                    sum[2] += p[2] * a;
+                    sum[3] += a;
+                    sum[4] += 1.0;
+                }
+            }
+        }
+        for (o, sum) in texel_row.iter_mut().zip(&sums) {
+            if sum[4] > 0.0 && sum[3] > 0.0 {
+                *o = [sum[0] / sum[3], sum[1] / sum[3], sum[2] / sum[3], sum[3] / sum[4]];
+            }
+        }
+    }
+}
+
+/// The visible pixels of `surface`, as the canvas shows them: the tests' whole-area reference for [`display_image`].
+#[cfg(test)]
 fn crop_image(surface: &Surface, area: PixelRect, display: &photocraft_engine::display_color::CanvasDisplay) -> ColorImage {
     display_image(area, display, |rect, out| surface.read_rgba_into(rect, out))
 }
@@ -453,23 +537,84 @@ mod tests {
     fn stale_refinements_and_failed_old_revisions_do_not_replace_new_settings() {
         let source = Surface::with_default(PixelFormat::RGBA8, &[0.2, 0.4, 0.6, 1.0]);
         let mut preview = DetailPreview::new(source.clone(), PixelRect::new(0, 0, 16, 16), Coverage::None);
+        preview.wanted = Some(Wanted { order: 2, params: CameraRaw::default(), inputs: inputs(), ctx: Context::default() });
+        preview.active = true;
         let (tx, rx) = std::sync::mpsc::channel();
         preview.pending = Some((1, rx));
         tx.send(Ok((1, source.clone()))).unwrap();
-        preview.poll(2);
+        preview.poll();
         assert!(preview.result.is_none());
         assert!(!preview.pending());
         let (tx, rx) = std::sync::mpsc::channel();
         preview.pending = Some((1, rx));
         tx.send(Err("old failure".into())).unwrap();
-        preview.poll(2);
+        preview.poll();
         assert_eq!(preview.failed_revision, Some(1), "a failure must not suppress the new revision");
+        assert!(preview.error.is_none(), "an old failure is not the wanted develop's");
         let (tx, rx) = std::sync::mpsc::channel();
         preview.pending = Some((2, rx));
         tx.send(Ok((2, source))).unwrap();
-        preview.poll(2);
+        preview.refresh();
         assert_eq!(preview.result.as_ref().map(|(r, _)| *r), Some(2));
+        assert!(preview.ready && preview.shown() == Some(2), "the wanted develop is shown");
         assert!(preview.error.is_none());
+        preview.unwant();
+        assert!(!preview.ready && preview.shown().is_none(), "a view the proxy serves shows the proxy");
+        // Zoomed in again with the same settings: the develop that landed is shown, none starts.
+        preview.want(&Context::default(), 9, &CameraRaw::default(), &inputs());
+        assert!(preview.shown() == Some(2) && !preview.pending(), "the same settings are not developed again");
+    }
+
+    /// The refinement is collected outside tests too (#17012): asked for, it lands and is shown, and the
+    /// develop of newer settings replaces it.
+    #[test]
+    fn a_wanted_develop_lands_and_follows_newer_settings() {
+        let area = PixelRect::new(0, 0, 8, 4);
+        let source = Surface::with_default(PixelFormat::RGBA8, &[0.25, 0.25, 0.25, 1.0]);
+        let mut preview = DetailPreview::new(source, area, Coverage::None);
+        let ctx = Context::default();
+        let wait = |preview: &mut DetailPreview, order: u64| {
+            for _ in 0..3000 {
+                preview.refresh();
+                if preview.shown() == Some(order) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            panic!("the develop {order} never landed: pending {}, error {:?}", preview.pending(), preview.error);
+        };
+        preview.want(&ctx, 1, &exposure_only(0.0), &inputs());
+        wait(&mut preview, 1);
+        let first = preview.result.as_ref().unwrap().1.rgba(3, 2);
+        // A pan asks again with the same settings: the landed develop stays shown, nothing is developed again.
+        preview.want(&ctx, 7, &exposure_only(0.0), &inputs());
+        assert!(preview.shown() == Some(1) && !preview.pending(), "the same settings are not developed again");
+        preview.want(&ctx, 2, &exposure_only(1.0), &inputs());
+        assert!(!preview.ready, "the old develop is not shown for new settings");
+        wait(&mut preview, 2);
+        let second = preview.result.as_ref().unwrap().1.rgba(3, 2);
+        assert!(second[0] > first[0] + 0.1, "the newer settings are developed: {second:?} after {first:?}");
+    }
+
+    /// A reduced read averages each texel's block, so a view of the whole refined image (Fit) reads it too.
+    #[test]
+    fn a_reduced_read_averages_blocks_and_leaves_the_outside_transparent() {
+        let area = PixelRect::new(0, 0, 4, 2);
+        let mut source = Surface::new(PixelFormat::RGBA8);
+        let values: Vec<f32> = (0..8).flat_map(|i| if i % 2 == 0 { [1.0, 1.0, 1.0, 1.0] } else { [0.0, 0.0, 0.0, 1.0] }).collect();
+        source.write_region(area, &values);
+        let mut doc = photocraft_doc::Document::new("test", photocraft_geom::Size::new(4, 2), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        doc.icc_profile = Some(craft::cms::Builtin::Srgb.profile().to_bytes());
+        let display = photocraft_engine::color_cmds::ColorState::default().canvas_display(&doc).unwrap();
+        let mut preview = DetailPreview::new(source.clone(), area, Coverage::None);
+        preview.result = Some((1, source));
+        preview.ready = true;
+        let mut out = ColorImage::new([3, 1], vec![Color32::RED; 3]);
+        assert!(preview.read(RasterRect::new(0, 0, 6, 2), 2, &display, &mut out));
+        let grey = out.pixels[0];
+        assert!(grey.r() > 110 && grey.r() < 150 && grey.a() == 255, "white and black average to mid grey: {grey:?}");
+        assert_eq!(out.pixels[1], grey);
+        assert_eq!(out.pixels[2], Color32::TRANSPARENT, "past the refined area");
     }
 
     #[test]

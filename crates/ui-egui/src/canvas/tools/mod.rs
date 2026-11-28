@@ -307,6 +307,9 @@ fn press_refused(app: &mut PhotocraftApp, tool: Tool) -> bool {
 /// case was measured: a layer inside a hidden group, a targeted mask, Sample All Layers and the other layer kinds keep
 /// the status-bar error. Hidden is checked before the lock, so a hidden layer with Lock All is quiet too.
 fn quiet_hidden_refusal(app: &PhotocraftApp, tool: Tool) -> bool {
+    if crate::brush_refusal::spot_healing_quiet(app, tool) {
+        return true;
+    }
     if tool != Tool::Remove || app.ui.tool_options.sample_all.remove || super::paint_target(app) != serde_json::json!("pixels") {
         return false;
     }
@@ -364,7 +367,12 @@ impl CanvasTool for Preflight<'_, '_> {
                 return ToolAction::Done;
             }
             let at = [doc.x, doc.y];
-            // The Triangle's ⌥ press that samples is the Eyedropper stand-in's, not a shape (#13364).
+            // Paint Bucket ⇧-click on the pasteboard sets the pasteboard colour (#12534): a
+            // preference, so it runs before the painting refusals, as quick pick does.
+            if tool == Tool::PaintBucket && self.scope.with_app(|app| super::paint_tool::bucket_pasteboard_click(app, at, pointer.mods)) {
+                return ToolAction::Done;
+            }
+            // Let the Eyedropper take an Alt press that samples the shape tool's Fill.
             if self.alt_stand_in && self.scope.with_app(|app| super::cursor_policy::shape_alt_samples(app, pointer.mods, at[0], at[1])) {
                 return ToolAction::Ignored;
             }
@@ -460,6 +468,11 @@ impl Preflight<'_, '_> {
         let pressure = pointer.sample.pressure;
         let mods = pointer.mods;
         self.scope.with_app(|app| {
+            // The Adjustment Brush paints a new layer's mask whatever the active layer is (hidden, locked, a group or
+            // type): only Indexed Color refuses it (#12519).
+            if tool == Tool::AdjustmentBrush {
+                return crate::adjustment_brush::press_refused(app);
+            }
             // Auto-Select's press picks the layer to move, so the hidden active layer is not its target.
             let picks = tool == Tool::Move && !crate::move_ui::moves_selected_pixels_with(app, tool) && app.ui.tool_options.move_auto_select != mods.cmd;
             (!picks && press_refused(app, tool))
@@ -670,7 +683,7 @@ fn with_rig<R>(
         if let Some(tool) = crop_tool {
             tools.crop.tool = tool;
         }
-        crop::finish(app, output);
+        crop::finish(app, &mut tools.crop.tool, output);
     }
     result
 }
@@ -709,7 +722,7 @@ pub(crate) fn run(app: &mut PhotocraftApp, ui: &egui::Ui, host: CanvasHost, out:
                 response.view = Some(view);
             }
         }
-        ctx.request_repaint();
+        craft::ui::runtime::frame::request_repaint(&ctx);
     }
     match response.gesture {
         Some(GesturePhase::Begin) => tools.gesture_on = app.session.documents().get(host.idx).map(|state| (state.doc.id.0, host)),

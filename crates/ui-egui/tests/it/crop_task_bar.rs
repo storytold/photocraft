@@ -141,21 +141,24 @@ fn ui_set_changes_only_the_place_fields_it_names() {
     draw_frame(&mut h, [40.0, 30.0], [260.0, 200.0]);
     drag_grip(&mut h, vec2(-60.0, -120.0));
     let dropped = bar(&h).expect("bar");
-    let at = h.state().ui.panels.task_bar.at;
-    // Pinning keeps the dragged place: the bar doesn't jump back under the frame.
+    // Unpinned, the drop is an offset from the bar's place under the frame.
+    let place = h.state().ui.panels.task_bar;
+    assert!(place.at.is_none() && place.offset.is_some(), "{place:?}");
+    // Pinning keeps the dragged place: the bar doesn't jump back under the frame, and stays where it shows.
     control(&mut h, "ui.set", json!({"panels": {"task_bar": {"pinned": true}}}));
-    assert_eq!(h.state().ui.panels.task_bar.at, at);
     assert!(h.state().ui.panels.task_bar.pinned);
+    assert!(h.state().ui.panels.task_bar.at.is_some(), "a pinned bar holds its position");
     assert_eq!(bar(&h).expect("bar").left_top(), dropped.left_top());
     // Placing it keeps the pin.
     control(&mut h, "ui.set", json!({"panels": {"task_bar": {"at": [12.0, 34.0]}}}));
-    assert_eq!(h.state().ui.panels.task_bar, photocraft_ui_egui::state::TaskBarPlace::new(true, Some([12.0, 34.0])));
+    assert!(h.state().ui.panels.task_bar.pinned);
+    assert_eq!(h.state().ui.panels.task_bar.at, Some([12.0, 34.0]));
     // A field the bar doesn't have is refused, and nothing changes.
     let v = request(&mut h, "ui.set", json!({"panels": {"task_bar": {"pinned": false, "nope": 1}}}));
     assert_eq!(v["ok"], false, "{v}");
     assert!(h.state().ui.panels.task_bar.pinned);
     // Reset bar position over the control channel.
-    control(&mut h, "ui.set", json!({"panels": {"task_bar": {"pinned": false, "at": null}}}));
+    control(&mut h, "ui.set", json!({"panels": {"task_bar": {"pinned": false, "at": null, "offset": null}}}));
     assert_eq!(h.state().ui.panels.task_bar, Default::default());
     let v = request(&mut h, "ui.inspect", json!({}));
     assert_eq!(v["result"]["taskBar"]["at"], Value::Null, "after the reset the bar follows the frame again");
@@ -174,6 +177,44 @@ fn the_bars_preset_dropdown_is_the_options_bars() {
     let [x0, y0, x1, y1] = frame_rect(&h).expect("a frame");
     assert!(((x1 - x0) - (y1 - y0)).abs() < 1e-6, "a square frame: {:?}", frame_rect(&h));
     assert_eq!(h.get_all_by_value("1 : 1 (Square)").count(), 2, "the options bar shows the same preset");
+}
+
+#[test]
+fn the_options_bar_ratio_list_takes_escape_and_enter_before_the_crop() {
+    let mut h = harness();
+    control(&mut h, "ui.set", json!({"panels": {"context_task_bar": false}}));
+    draw_frame(&mut h, [100.0, 50.0], [300.0, 250.0]);
+    assert!(pending(h.state()), "the drawn square crop is pending");
+    let before = frame_rect(&h).expect("the pending frame");
+    let size = |h: &Harness| h.state().session.active().map(|s| (s.doc.size.width, s.doc.size.height));
+    let history = |h: &Harness| h.state().session.active().expect("the crop document").history.past_len();
+    let steps = history(&h);
+    let square = "1 : 1 (Square)";
+
+    // Escape dismisses the list. Enter accepts its first row, the selected free Ratio.
+    // Neither key should reach the pending crop while the list is open (#7386).
+    for key in [egui::Key::Escape, egui::Key::Enter] {
+        assert!(!has(&h, square), "the square row is only in the open list");
+        let at = h.get_by_value("Ratio").rect().center();
+        click_at(&mut h, at);
+        assert!(has(&h, square), "the options bar ratio list opened");
+        h.key_press(key);
+        h.run_steps(12);
+        assert!(!has(&h, square), "{key:?} closed the ratio list");
+        assert!(pending(h.state()), "{key:?} left the crop pending");
+        assert_eq!(frame_rect(&h), Some(before), "{key:?} left the frame alone");
+        assert_eq!(size(&h), Some((400, 300)), "{key:?} did not crop the document");
+    }
+
+    // A closed dropdown still has focus. Click inside the frame to return focus to the canvas.
+    let at = h.state().last_canvas_rect.center();
+    click_at(&mut h, at);
+    assert_eq!(frame_rect(&h), Some(before), "the click only moved focus");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(6);
+    assert_eq!(size(&h), Some((200, 200)), "Enter on the canvas commits the pending crop");
+    assert_eq!(history(&h), steps + 1, "Enter adds one document history step");
+    assert!(!pending(h.state()), "Enter clears the pending Crop session once the document accepts the crop");
 }
 
 #[test]
@@ -244,6 +285,7 @@ fn cancel_and_done_only_while_a_crop_is_pending() {
     let at = widget(&h, "Done");
     click_at(&mut h, at);
     assert_eq!(h.state().session.active().map(|s| (s.doc.size.width, s.doc.size.height)), Some((220, 170)), "Done crops");
+    assert!(!pending(h.state()), "Done also clears the pending Crop session");
 }
 
 /// The active document's stored zoom.

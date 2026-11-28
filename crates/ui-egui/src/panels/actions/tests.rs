@@ -2,6 +2,7 @@ use super::*;
 use craft::automation::actions::ActionStep;
 use craft::automation::ui::actions::ActionsHost as _;
 use egui_kittest::{Harness, kittest::Queryable};
+use photocraft_engine::actions_cmds::ActionsExt;
 
 use crate::panels::panel_docking::{apply, is_front, is_shown, show_panel};
 use craft::behavior::dock::Action as DockAction;
@@ -17,7 +18,7 @@ fn step(id: &str, params: Value) -> ActionStep {
 fn push(app: &mut PhotocraftApp, name: &str, set: Option<&str>, steps: Vec<ActionStep>) {
     let mut action = Action::new(name, steps);
     action.set = set.map(str::to_owned);
-    app.session.actions.list.push(action).unwrap();
+    app.session.actions_mut().list.push(action).unwrap();
 }
 
 fn layer_names(app: &PhotocraftApp) -> Vec<String> {
@@ -25,7 +26,7 @@ fn layer_names(app: &PhotocraftApp) -> Vec<String> {
 }
 
 fn commands(app: &PhotocraftApp, action: usize) -> Vec<String> {
-    app.session.actions.list.action(action).unwrap().steps.iter().map(|s| s.command.clone()).collect()
+    app.session.actions().list.action(action).unwrap().steps.iter().map(|s| s.command.clone()).collect()
 }
 
 /// Two sets, Web listed first: "Resize" (Web) adds a layer "w", "Sharpen" and "Soften" (Retouch)
@@ -71,7 +72,7 @@ fn a_function_key_with_shift_and_command_plays_its_action() {
     let mut app = new_app();
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
     app.session
-        .actions
+        .actions_mut()
         .list
         .push(Action { name: "Action 1".into(), steps: vec![step("layer.new.layer", json!({}))], disabled: Default::default(), ..Default::default() })
         .unwrap();
@@ -117,11 +118,11 @@ fn the_host_reads_the_shortcut_text_the_engine_writes() {
     push(&mut app, "Keyed", None, vec![]);
     let key = photocraft_engine::atn_cmds::function_key_name(2, true, true);
     assign_shortcut(&mut app, "Keyed", &key).unwrap();
-    let action = app.session.actions.list.action(0).unwrap();
+    let action = app.session.actions().list.action(0).unwrap();
     let choice = PhotoActions::new(&app.session, false).shortcut(action);
     assert_eq!(choice, Some(craft::automation::ui::actions::ShortcutChoice::new(2, true, true)));
     assign_shortcut(&mut app, "Keyed", "Alt+F2").unwrap();
-    let action = app.session.actions.list.action(0).unwrap();
+    let action = app.session.actions().list.action(0).unwrap();
     assert_eq!(PhotoActions::new(&app.session, false).shortcut(action), None);
 }
 
@@ -133,12 +134,12 @@ fn step_check_box_excludes_the_step_from_playback_and_batch() {
     push(&mut app, "Three", None, steps.to_vec());
     // PLAN: `ToggleEdit` is non-exhaustive with no constructor outside the framework; the include cell's rule is `set_step_cell`.
     set_step_cell(&mut app, 0, 1, true, false).unwrap();
-    let action = app.session.actions.list.action(0).unwrap();
+    let action = app.session.actions().list.action(0).unwrap();
     assert!(action.disabled.contains(&1));
     assert_eq!(action_steps(action).len(), 2, "Batch and droplets get only the checked steps");
     // A cell already at the wanted value runs nothing: the engine command would flip it back.
     set_step_cell(&mut app, 0, 1, true, false).unwrap();
-    assert!(app.session.actions.list.action(0).unwrap().disabled.contains(&1));
+    assert!(app.session.actions().list.action(0).unwrap().disabled.contains(&1));
     apply_actions_events(&mut app, vec![ActionsEvent::play(0, 0)]);
     assert_eq!(layer_names(&app), ["A", "C"]);
 }
@@ -159,7 +160,7 @@ fn reordering_moves_a_step_within_its_action_and_an_action_into_a_set() {
     assert_eq!(commands(&app, 0).len(), 3);
     assert!(commands(&app, 1).is_empty());
     reorder(&mut app, ActionSelection::Action(1), ActionPlace::action(0, Some("Web".into()))).unwrap();
-    let list = &app.session.actions.list;
+    let list = &app.session.actions().list;
     assert_eq!((list.action(0).unwrap().name.as_str(), list.set_of(0)), ("Second", Some("Web")));
     assert_eq!((list.action(1).unwrap().name.as_str(), list.set_of(1)), ("First", None));
 }
@@ -234,7 +235,7 @@ fn new_action_with_no_set_selected_is_in_no_set() {
     assert!(app.ui.actions.panel.selected.is_none());
     apply_actions_events(&mut app, vec![ActionsEvent::begin_recording(None)]);
     app.run("actions.stop", json!({})).unwrap();
-    let list = &app.session.actions.list;
+    let list = &app.session.actions().list;
     assert_eq!((list.actions().len(), list.action(1).unwrap().name.as_str(), list.set_of(1)), (2, "Action 2", None));
 }
 
@@ -254,11 +255,11 @@ fn reopening_the_actions_panel_keeps_the_selected_set_and_empty_sets() {
     assert!(!is_shown(&app, "actions"), "closed");
     show_panel(&mut app, "actions", Some(true)).unwrap();
     assert!(is_shown(&app, "actions") && is_front(&app, "actions"), "open again");
-    assert_eq!(app.session.actions.list.sets(), ["Retouch", "Web", "Print"]);
+    assert_eq!(app.session.actions().list.sets(), ["Retouch", "Web", "Print"]);
     assert_eq!(app.ui.actions.panel.selected, Some(ActionSelection::Set("Web".into())));
     apply_actions_events(&mut app, vec![ActionsEvent::begin_recording(None)]);
     app.run("actions.stop", json!({})).unwrap();
-    assert_eq!(app.session.actions.list.set_of(1), Some("Web"));
+    assert_eq!(app.session.actions().list.set_of(1), Some("Web"));
 }
 
 /// #7535: with a set's folder row selected and no action, recording makes a new action in that set.
@@ -272,7 +273,7 @@ fn start_recording_with_a_set_selected_records_a_new_action_into_it() {
     assert_eq!(new_action_set(&app).as_deref(), Some("Web"));
     apply_actions_events(&mut app, vec![ActionsEvent::begin_recording(None)]);
     app.run("actions.stop", json!({})).unwrap();
-    let list = &app.session.actions.list;
+    let list = &app.session.actions().list;
     assert_eq!((list.action(1).unwrap().name.as_str(), list.set_of(1)), ("Action 2", Some("Web")));
 }
 

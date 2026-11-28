@@ -5,6 +5,7 @@ use craft::automation::actions::{Action, ActionStep};
 use craft::automation::ui::actions::ActionSelection;
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{HostedParamDialog, ParamKind};
+use photocraft_engine::actions_cmds::ActionsExt;
 
 fn app_with(n: usize) -> (Box<PhotocraftApp>, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -219,7 +220,7 @@ fn dtf_dialog_reopens_on_the_remembered_values() {
     let (mut app, ctx) = app_with(1);
     app.run("image.dtf", json!({"source": "composite", "contract": 4, "name": "White", "color": "#00ff00", "solidity": 80, "applyAtCanvasBounds": true}))
         .unwrap();
-    assert!(app.session.actions.list.actions().iter().all(|action| action.name != "DTF"), "running the command does not install the action");
+    assert!(app.session.actions().list.actions().iter().all(|action| action.name != "DTF"), "running the command does not install the action");
     let id = open_form(&mut app, &ctx, "image.dtf");
     let values = fields(&app, id);
     assert_eq!(values["source"], "composite");
@@ -228,6 +229,56 @@ fn dtf_dialog_reopens_on_the_remembered_values() {
     assert_eq!(values["solidity"].as_f64(), Some(80.0));
     assert_eq!(values["applyAtCanvasBounds"], true);
     assert_eq!(values["color"], json!([0.0, 1.0, 0.0]));
+}
+
+#[test]
+fn dtf_dialog_uses_one_scale_for_the_whole_color() {
+    let (mut app, ctx) = app_with(1);
+    app.session.edit_prefs(|prefs| {
+        prefs.dialogs.insert("image.dtf".into(), json!({"color": [1, 128, 0]}));
+    });
+    let id = open_form(&mut app, &ctx, "image.dtf");
+    let values = fields(&app, id);
+    let color = values["color"].as_array().unwrap();
+    assert!((color[0].as_f64().unwrap() - 1.0 / 255.0).abs() < 1e-6);
+    assert!((color[1].as_f64().unwrap() - 128.0 / 255.0).abs() < 1e-6);
+    assert_eq!(color[2].as_f64(), Some(0.0));
+}
+
+/// Fit Image's dialog bounds apply before the command, where a zero side would mean unconstrained.
+#[test]
+fn fit_image_validates_dialog_bounds_before_one_undoable_resize() {
+    let (mut app, ctx) = app_with(1);
+    let id = open_form(&mut app, &ctx, "file.automate.fitImage");
+    let opening = fields(&app, id);
+    let original = app.session.active().unwrap();
+    let (size, steps, revision) = (original.doc.size, original.history.past_len(), original.revision);
+
+    for key in ["width", "height"] {
+        for value in [json!(0), json!(300_001), json!("abc")] {
+            assert!(app.framework.dialogs.set_json_field(&ctx, id, key, value.clone()).is_err(), "{key} accepted {value}");
+            assert_eq!(fields(&app, id), opening);
+        }
+    }
+
+    set(&mut app, &ctx, id, "width", json!(1));
+    set(&mut app, &ctx, id, "height", json!(300_000));
+    let accepted = fields(&app, id);
+    assert_eq!(accepted["width"].as_f64(), Some(1.0));
+    assert_eq!(accepted["height"].as_f64(), Some(300_000.0));
+    set(&mut app, &ctx, id, "width", json!(80));
+    set(&mut app, &ctx, id, "height", json!(40));
+    let staged = app.session.active().unwrap();
+    assert_eq!((staged.doc.size, staged.history.past_len(), staged.revision), (size, steps, revision));
+
+    confirm(&mut app, &ctx, id).unwrap();
+    let resized = app.session.active().unwrap();
+    assert_eq!((resized.doc.size.width, resized.doc.size.height), (50, 40));
+    assert_eq!(resized.history.past_len(), steps + 1);
+    assert_eq!(resized.history.undo_label(), Some("Image Size"));
+
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.size, size);
 }
 
 #[test]
@@ -296,6 +347,18 @@ fn print_size_uses_the_screen_resolution_preference() {
     assert_eq!(app.ui.views[0].zoom, 96.0, "96 ppi screen / 1 ppi document = 9600 %");
 }
 
+/// Window › Arrange works in the document area (the canvas panel's), not the app's whole content.
+#[test]
+fn the_arrange_space_is_the_document_area() {
+    let (mut app, ctx) = app_with(2);
+    let area = egui::Rect::from_min_size(egui::pos2(210.0, 64.0), egui::vec2(500.0, 400.0));
+    assert_ne!(area, ctx.content_rect());
+    app.last_canvas_rect = area;
+    let space = super::arrange::space(&app);
+    assert_eq!(space.area, area);
+    assert_eq!(space.size, area.size() * 0.5);
+}
+
 #[test]
 fn arrange_layouts_floating_windows_and_matching() {
     let (mut app, ctx) = app_with(3);
@@ -319,10 +382,10 @@ fn arrange_layouts_floating_windows_and_matching() {
 }
 
 /// Match Zoom clamps the matched zoom to each document's own range: a 10 x 10 document can't go
-/// below the zoom at which its shorter side is 2 px, even when the source view is lower.
+/// below the zoom at which its shorter side is 2 px, even  the source view is lower.
 #[test]
 fn match_zoom_clamps_to_each_documents_zoom_range() {
-    let lowest = craft::behavior::canvas::ZoomLadder::min(craft::behavior::kurbo::Size::new(10.0, 10.0)) as f32;
+    let lowest = craft::behavior::canvas::ZoomScheme::PHOTOSHOP.min(craft::behavior::kurbo::Size::new(10.0, 10.0)) as f32;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 10, "height": 10})).unwrap();
     app.run("file.new", json!({"width": 2000, "height": 2000})).unwrap();
@@ -411,7 +474,7 @@ fn batch_menu_starts_on_the_selected_actions_set_and_runs_its_action() {
     for (set, name, step) in [("A", "Retouch", "image.adjustments.invert"), ("B", "Turn", "image.imageRotation.90cw")] {
         let mut action = Action::new(name, vec![ActionStep::new(step, json!({}))]);
         action.set = Some(set.into());
-        app.session.actions.list.push(action).unwrap();
+        app.session.actions_mut().list.push(action).unwrap();
     }
     app.ui.actions.panel.selected = Some(ActionSelection::Action(1));
     let id = open_form(&mut app, &ctx, "file.automate.batch");
@@ -438,7 +501,7 @@ fn batch_menu_runs_the_action_chosen_in_the_form() {
     app.run("file.new", json!({"width": 2, "height": 1})).unwrap();
     app.run("file.saveACopy", json!({"path": source.join("source.png").to_string_lossy()})).unwrap();
     for (name, step) in [("Invert", "image.adjustments.invert"), ("RotateRGB", "image.imageRotation.90cw")] {
-        app.session.actions.list.push(Action::new(name, vec![ActionStep::new(step, json!({}))])).unwrap();
+        app.session.actions_mut().list.push(Action::new(name, vec![ActionStep::new(step, json!({}))])).unwrap();
     }
     app.ui.actions.panel.selected = Some(ActionSelection::Action(0));
     let id = open_form(&mut app, &ctx, "file.automate.batch");
@@ -462,8 +525,8 @@ fn batch_menu_runs_the_action_chosen_in_the_form() {
     let id = open_form(&mut app, &ctx, "file.automate.batch");
     set(&mut app, &ctx, id, "action", json!("RotateRGB"));
     set(&mut app, &ctx, id, "output", json!(cancelled.to_string_lossy()));
-    let rotate = app.session.actions.list.actions().iter().position(|action| action.name == "RotateRGB").unwrap();
-    app.session.actions.list.delete_action(rotate).unwrap();
+    let rotate = app.session.actions().list.actions().iter().position(|action| action.name == "RotateRGB").unwrap();
+    app.session.actions_mut().list.delete_action(rotate).unwrap();
     // The run's refusal reaches the user through the status bar and a notice, as a failed filter's does.
     confirm(&mut app, &ctx, id).unwrap();
     assert!(app.ui.status_error && app.ui.status.contains("no action named"), "{}", app.ui.status);
@@ -588,7 +651,7 @@ fn batch_dialogs_include_all_subfolders() {
     std::fs::create_dir_all(dir.join("in/sub")).unwrap();
     let input = dir.join("in").to_string_lossy().into_owned();
     app.run("file.saveACopy", json!({"path": dir.join("in/sub/a.png").to_string_lossy()})).unwrap();
-    app.session.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
     for (command, out) in [("file.automate.batch", "batch"), ("file.scripts.imageProcessor", "processed")] {
         let d = open_form(&mut app, &ctx, command);
         let shown = fields(&app, d);
@@ -667,7 +730,7 @@ fn a_batch_that_fails_on_its_files_says_which_and_why() {
         app.run("file.saveACopy", json!({"path": dir.join("in").join(name).to_string_lossy()})).unwrap();
     }
     // A step for a layer that only the recording document has.
-    app.session.actions.list.push(Action::new("Stale", vec![ActionStep::new("layer.setProps", json!({"layer": 424_242, "opacity": 50}))])).unwrap();
+    app.session.actions_mut().list.push(Action::new("Stale", vec![ActionStep::new("layer.setProps", json!({"layer": 424_242, "opacity": 50}))])).unwrap();
     let d = open_form(&mut app, &ctx, "file.automate.batch");
     set(&mut app, &ctx, d, "input", json!(dir.join("in").to_string_lossy()));
     set(&mut app, &ctx, d, "output", json!(dir.join("out").to_string_lossy()));

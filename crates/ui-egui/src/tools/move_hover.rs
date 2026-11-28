@@ -111,7 +111,7 @@ pub(crate) fn active_outline(app: &mut PhotocraftApp, at: Option<[f64; 2]>, comm
 /// position. The Layers panel reads `canvas_hover_layer`, so a change of it asks for a repaint.
 pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, canvas: egui::Rect, pointer: Option<egui::Pos2>) {
     let prev_canvas_hover = app.canvas_hover_layer;
-    let command = craft::ui::runtime::pointer::frame(ui.ctx()).mods.cmd;
+    let command = craft::ui::runtime::pointer::mods(ui.ctx()).cmd;
     let pressed = crate::canvas::tools::in_gesture(app);
     let at = pointer.and_then(|p| crate::canvas::document_display::doc_point_at(app, p)).map(|p| [p.x, p.y]);
     let outline = active_outline(app, at, command, pressed);

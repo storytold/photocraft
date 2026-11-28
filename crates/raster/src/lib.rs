@@ -35,7 +35,7 @@ pub fn stored_tiles_bytes(tiles: u64, fmt: &PixelFormat) -> u64 {
 }
 
 /// A checked surface allocation could not be represented or reserved.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, craft_ui_macros::PlainData)]
 pub enum AllocationError {
     ScratchRead(String),
     SizeOverflow,
@@ -63,7 +63,7 @@ impl fmt::Display for AllocationError {
 impl std::error::Error for AllocationError {}
 
 /// Failure to prepare an interruptible row write.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, craft_ui_macros::PlainData)]
 pub enum RowWriteError {
     Allocation(AllocationError),
     Cancelled(Cancelled),
@@ -226,6 +226,13 @@ impl Tile {
     }
 }
 
+// The cell moves the bytes between memory and the scratch disk behind `&self`, and the pixels stay the same: an
+// eviction compresses and drops them under the write lock, a reload restores the same bytes, and only `&mut` writes
+// (`bytes_mut`) change them. The exception is a scratch read error: `bytes` then returns a zero placeholder, and a
+// later successful reload returns the real pixels, both through `&self`. Both transitions move
+// `spill::read_error_generation`, so views that show document pixels also key on it.
+impl craft_tracked::PlainData for Tile {}
+
 impl Clone for Tile {
     fn clone(&self) -> Self {
         match self.try_bytes() {
@@ -316,6 +323,10 @@ pub struct Surface {
     default_pixel: Box<[u8]>,
     tiles: BTreeMap<TileCoord, Arc<Tile>>,
 }
+
+// `generation` names the current pixels: a read assigns the number once, and every write goes through `&mut`
+// (`note_mutation`), which clears it. A shared reference can't change the pixels or which number names them.
+impl craft_tracked::PlainData for Surface {}
 
 impl Clone for Surface {
     fn clone(&self) -> Self {
