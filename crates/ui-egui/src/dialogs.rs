@@ -768,6 +768,8 @@ mod color_lookup_smart_edit_tests;
 pub(crate) mod color_picker_preview;
 pub mod color_picker_ui;
 pub mod color_range_ui;
+#[cfg(test)]
+mod color_settings_policy_greying_tests;
 pub mod color_table_ui;
 pub(crate) mod conditional_mode_change_dialog;
 pub mod count_group_name_ui;
