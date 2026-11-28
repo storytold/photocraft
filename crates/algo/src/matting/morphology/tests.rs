@@ -28,9 +28,16 @@ fn gray_and_hdr_values_match_at_edges_and_every_radius() {
                     }
                 })
                 .collect();
-            for r in 0..=65 {
-                for grow in [false, true] {
-                    assert_eq!(morph(&src, w, h, r, grow), repeated(&src, w, h, r, grow), "{w}x{h} depth={depth} r={r} grow={grow}");
+            for grow in [false, true] {
+                // The first r passes are the same for every larger radius.
+                let mut expected = src.clone();
+                let mut next = vec![0.0; expected.len()];
+                for r in 0..=65 {
+                    if r > 0 {
+                        repeat_step(&expected, &mut next, w, h, r % 2 == 1, grow);
+                        std::mem::swap(&mut expected, &mut next);
+                    }
+                    assert_eq!(morph(&src, w, h, r, grow), expected, "{w}x{h} depth={depth} r={r} grow={grow}");
                 }
             }
         }
