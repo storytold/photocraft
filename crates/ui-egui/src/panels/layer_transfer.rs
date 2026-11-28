@@ -6,14 +6,15 @@
 //! Where the copies land: a Move-tool drag puts the pixel that was grabbed under the pointer, and
 //! a Layers panel drag centres the layers on it. With ⇧, or when released on the tab itself, they
 //! keep their place when both documents have the same pixel size and are centred otherwise
-//! (Photoshop's ⇧-drag). With Window › Arrange tiling several documents, releasing over another
-//! document's tile drops there.
+//! (Photoshop's ⇧-drag). Dropping onto a floating window's frame centres the layers. With Window › Arrange
+//! tiling several documents, releasing over another document's tile drops there.
 //!
 //! A Move drag with a pixel selection copies only those pixels into a new layer.
 
 use craft::layers::ui::panel::{LayersDrag, document_hash};
 use craft::ui::canvas::ToolHost;
 use craft::ui::runtime::drag;
+use craft::ui::runtime::windows::WindowHost;
 use photocraft_doc::{DocId, LayerId};
 use serde_json::json;
 
@@ -33,7 +34,7 @@ struct Transfer {
     selection_only: bool,
 }
 
-fn key() -> egui::Id {
+pub(super) fn key() -> egui::Id {
     egui::Id::unique("pc-layer-transfer")
 }
 
@@ -114,13 +115,68 @@ fn move_drag(app: &PhotocraftApp, ctx: &egui::Context) -> Option<[f64; 2]> {
     plain.then_some(d.start)
 }
 
+/// The latest pointer position (in root window coordinates), whether released this frame,
+/// and whether the primary button is held, checked across the root window and all floating
+/// document viewports.
+fn pointer_status(app: &PhotocraftApp, ctx: &egui::Context) -> (Option<egui::Pos2>, bool, bool) {
+    let host = WindowHost::of(ctx);
+    let main_facts = host.facts(egui::ViewportId::ROOT);
+
+    let (root_pos, root_released, root_down) =
+        ctx.input_for(egui::ViewportId::ROOT, |i| (i.pointer.latest_pos(), i.pointer.any_released(), i.pointer.primary_down()));
+
+    let mut pos = root_pos;
+    let mut released = root_released;
+    let mut down = root_down;
+    let mut release_vp = root_released.then_some(egui::ViewportId::ROOT);
+
+    for (group, _) in &app.ui.document_windows.floating {
+        if crate::canvas::document_windows::is_minimized(ctx, group.id) {
+            continue;
+        }
+        let key = egui::Id::unique(("floating document viewport", group.id));
+        let Some(vp) = ctx.data(|d| d.get_temp::<egui::ViewportId>(key)) else { continue };
+        let (vp_pos, vp_released, vp_down) = ctx.input_for(vp, |i| (i.pointer.latest_pos(), i.pointer.any_released(), i.pointer.primary_down()));
+        if vp_released {
+            released = true;
+            release_vp = Some(vp);
+        }
+        if vp_down {
+            down = true;
+        }
+        if let Some(p) = vp_pos
+            && let Some(facts) = host.facts(vp)
+        {
+            let desktop_p = p + facts.inner.min.to_vec2();
+            let root_p = main_facts.map_or(desktop_p, |main| desktop_p - main.inner.min.to_vec2());
+            if vp_released || (release_vp.is_none() && (vp_down || pos.is_none())) {
+                pos = Some(root_p);
+            }
+        }
+    }
+
+    if let Some(rel_vp) = release_vp {
+        if rel_vp == egui::ViewportId::ROOT {
+            pos = root_pos;
+        } else if let Some(facts) = host.facts(rel_vp)
+            && let Some(p) = ctx.input_for(rel_vp, |i| i.pointer.latest_pos())
+        {
+            let desktop_p = p + facts.inner.min.to_vec2();
+            let root_p = main_facts.map_or(desktop_p, |main| desktop_p - main.inner.min.to_vec2());
+            pos = Some(root_p);
+        }
+    }
+
+    (pos, released, down)
+}
+
 /// The pointer, while layers are dragged (or a Move drag could become a transfer): tabs only
 /// hit-test it then.
 pub fn pointer_if_armed(app: &PhotocraftApp, ctx: &egui::Context) -> Option<egui::Pos2> {
     if transfer(app, ctx).is_none() && move_drag(app, ctx).is_none() {
         return None;
     }
-    ctx.input(|i| i.pointer.latest_pos())
+    pointer_status(app, ctx).0
 }
 
 /// The pointer is over document tab `index` while layers are dragged: a Move drag becomes a
@@ -180,10 +236,11 @@ pub fn over_tab(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize) {
     }
     if app.session.active_index() != Some(index) {
         app.session.set_active(index);
-        app.jobs.focus = None;
     }
-    if ctx.input(|i| i.pointer.any_released()) {
-        drop(app, ctx, index, None);
+    app.jobs.focus = None;
+    let (_, released, _) = pointer_status(app, ctx);
+    if released {
+        drop(app, ctx, index, DropTarget::Tab);
     }
 }
 
@@ -195,25 +252,24 @@ pub fn over_tab(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize) {
 /// first pass), so a release drops once; the first pass also clears the Move-tool transfer.
 pub fn finish(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(t) = transfer(app, ctx) else { return };
-    let (pos, released, down) = ctx.input(|i| (i.pointer.latest_pos(), i.pointer.any_released(), i.pointer.primary_down()));
+    let (pos, released, down) = pointer_status(app, ctx);
     let target = pos.and_then(|p| target_at(app, p));
     if !released {
         if !down {
             clear(ctx);
         } else if let Some(p) = pos
-            && app.session.active().is_some_and(|st| st.doc.id != t.source)
+            && let Some((dest, _)) = target
+            && app.session.documents().get(dest).is_some_and(|st| st.doc.id != t.source)
         {
             if t.grab.is_some() {
                 ghost(ctx, p, &t.label);
             }
-            if target.is_some() {
-                ctx.set_cursor_icon(egui::CursorIcon::Copy);
-            }
+            ctx.set_cursor_icon(egui::CursorIcon::Copy);
         }
         return;
     }
     if let Some((dest, at)) = target {
-        drop(app, ctx, dest, at);
+        drop(app, ctx, dest, at.map_or(DropTarget::Frame, DropTarget::Canvas));
     }
     clear(ctx);
 }
@@ -227,20 +283,57 @@ pub(crate) fn prepare(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Do not consume a source drag merely because it passes over another tile. On release this
     // runs before canvas input, so a destination can take ownership without the source committing;
     // returning to the source still releases as the original move.
-    if !ctx.input(|i| i.pointer.any_released()) {
+    let (pos, released, _) = pointer_status(app, ctx);
+    if !released {
         return;
     }
-    let Some(pos) = pointer_if_armed(app, ctx) else { return };
+    let Some(pos) = (move_drag(app, ctx).is_some()).then_some(pos).flatten() else { return };
     let Some((dest, _)) = target_at(app, pos) else { return };
-    if app.session.active_index() != Some(dest) && arm_move_transfer(app, ctx, dest) {
-        app.session.set_active(dest);
+    if arm_move_transfer(app, ctx, dest) {
+        if app.session.active_index() != Some(dest) {
+            app.session.set_active(dest);
+        }
         app.jobs.focus = None;
     }
 }
 
-/// The document under screen point `p` and the document point there. Arranged tiles use their
-/// own view transform, so selected pixels and plain layers both land at the visible drop point.
+/// The document under screen point `p` and the document point there. Arranged tiles and floating
+/// windows use their own view transform, so selected pixels and plain layers both land at the
+/// visible drop point.
 fn target_at(app: &PhotocraftApp, p: egui::Pos2) -> Option<(usize, Option<[f64; 2]>)> {
+    let desktop_p = WindowHost::of(app.ctx()).facts(egui::ViewportId::ROOT).map_or(p, |main| p + main.inner.min.to_vec2());
+    // Floating windows stay above the main window (enforced via WindowLevel::Palette in window setup)
+    // and are ordered back-to-front in `app.ui.document_windows.floating`, so reverse iteration hits
+    // the topmost floating window under the pointer before checking the main canvas underneath.
+    for (group, window_rect) in app.ui.document_windows.floating.iter().rev() {
+        if crate::canvas::document_windows::is_minimized(app.ctx(), group.id) {
+            continue;
+        }
+        let Some(shown) = group.shown.or_else(|| group.documents.first().copied()) else { continue };
+        let Some(d) = crate::canvas::tabs::document_index(app, shown) else { continue };
+        let host = CanvasHost { idx: d, window: Some(group.id) };
+        if let Some(facts) = crate::canvas::document_windows::viewport_facts(app.ctx(), group.id) {
+            let bounds = facts.outer.unwrap_or(facts.inner);
+            if bounds.contains(desktop_p) {
+                let local_p = desktop_p - facts.inner.min.to_vec2();
+                if let Some(space) = ToolHost::shown_space(app.ctx(), host.canvas_id())
+                    && space.view.rect.contains(local_p)
+                {
+                    let at = space.view.to_doc(local_p);
+                    return Some((d, Some([at.x, at.y])));
+                }
+                return Some((d, None));
+            }
+        } else if window_rect.contains(p) {
+            if let Some(space) = ToolHost::shown_space(app.ctx(), host.canvas_id())
+                && space.view.rect.contains(p)
+            {
+                let at = space.view.to_doc(p);
+                return Some((d, Some([at.x, at.y])));
+            }
+            return Some((d, None));
+        }
+    }
     if !app.last_canvas_rect.contains(p) {
         return None;
     }
@@ -253,21 +346,36 @@ fn target_at(app: &PhotocraftApp, p: egui::Pos2) -> Option<(usize, Option<[f64; 
     match crate::canvas::arranged_cells(app, app.last_canvas_rect) {
         Some(cells) => cells.into_iter().find(|(_, r)| r.contains(p)).map(|(d, _)| (d, doc_point(d))),
         None => {
-            let d = app.session.active_index()?;
+            let d = crate::canvas::tabs::main_canvas_document(app)?;
             Some((d, doc_point(d)))
         }
     }
 }
 
-/// Copy the dragged layers into document `dest`, at document point `at` (see the module docs).
-fn drop(app: &mut PhotocraftApp, ctx: &egui::Context, dest: usize, at: Option<[f64; 2]>) {
+/// Where a layer drag was released.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum DropTarget {
+    /// Dropped on the canvas at document-space coordinate `[x, y]`.
+    Canvas([f64; 2]),
+    /// Dropped on the window chrome/frame of a floating document.
+    Frame,
+    /// Dropped on a document tab.
+    Tab,
+}
+
+/// Copy the dragged layers into document `dest`, at target `target` (see the module docs).
+pub(crate) fn drop(app: &mut PhotocraftApp, ctx: &egui::Context, dest: usize, target: DropTarget) {
     let Some(t) = transfer(app, ctx) else { return };
     clear(ctx);
     let docs = app.session.documents();
     let Some(src) = docs.iter().position(|d| d.doc.id == t.source) else { return };
     if dest == src
-        && let Some(at) = at
+        && let DropTarget::Canvas(at) = target
     {
+        if app.session.active_index() != Some(dest) {
+            app.session.set_active(dest);
+        }
+        app.jobs.focus = None;
         if let Some(frame) = crate::frame_tool::frame_at(app, at)
             && let [source] = t.layers.as_slice()
         {
@@ -283,17 +391,23 @@ fn drop(app: &mut PhotocraftApp, ctx: &egui::Context, dest: usize, at: Option<[f
     let same_size = to.doc.size == docs[src].doc.size;
     let mut p = json!({"document": dest, "source": src, "layers": t.layers});
     p["selectionOnly"] = json!(t.selection_only);
-    match at.filter(|_| !ctx.input(|i| i.modifiers.shift)) {
-        Some(at) => match t.grab {
+    match target {
+        DropTarget::Canvas(at) if !ctx.input(|i| i.modifiers.shift) => match t.grab {
             Some(g) => p["offset"] = json!([(at[0] - g[0]).round(), (at[1] - g[1]).round()]),
             None => p["at"] = json!(at),
         },
-        None => p["center"] = json!(!same_size),
+        DropTarget::Frame => p["center"] = json!(true),
+        DropTarget::Tab | DropTarget::Canvas(_) => p["center"] = json!(!same_size),
     }
     if let Err(e) = app.run("layer.copyToDocument", p) {
         app.ui.status = e;
         app.ui.status_error = true;
+        return;
     }
+    if app.session.active_index() != Some(dest) {
+        app.session.set_active(dest);
+    }
+    app.jobs.focus = None;
 }
 
 /// The dragged layers' name next to the pointer, for a Move-tool transfer.

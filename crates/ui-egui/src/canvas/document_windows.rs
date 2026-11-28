@@ -7,7 +7,7 @@ use craft::behavior::kurbo::Size;
 use craft::host::target::WindowState;
 use craft::ui::canvas::ToolHost;
 use craft::ui::contract::{ShowContainer as _, SizeLimits};
-use craft::ui::runtime::windows::WindowHost;
+use craft::ui::runtime::windows::{WindowHost, WindowLevel};
 use craft::ui::shell::{DocumentWindow, Title, TitleBar, Wrapped};
 use craft::window::policy::Frame;
 use egui::{Rect, Vec2, vec2};
@@ -34,6 +34,8 @@ fn wants_wrap(preference: bool, before: &View, after: &View) -> bool {
 fn close_window(app: &mut PhotocraftApp, id: u64) {
     app.ui.window_views.remove(&id);
     app.ui.document_windows.close_window(id);
+    let key = egui::Id::unique(("floating document viewport", id));
+    app.ctx().data_mut(|d| d.remove_temp::<egui::ViewportId>(key));
 }
 
 /// Puts `app.ui.document_windows` in step with the open documents: a document no group holds joins the docked
@@ -86,39 +88,42 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let mut view = start.clone();
         let mut dock = false;
         let mut bar_rect = None;
-        let inner = DocumentWindow::new(title).first_placed(rect).overlay(|o| o.size_limits(SizeLimits::at_least(MIN_SIZE))).show(ui, |ui, cx| {
-            if let Some(bar) = window_title_bar(ui, bar_title.clone()) {
-                if bar.close {
-                    cx.request_close();
+        let inner = DocumentWindow::new(title).level(WindowLevel::Palette).first_placed(rect).overlay(|o| o.size_limits(SizeLimits::at_least(MIN_SIZE))).show(
+            ui,
+            |ui, cx| {
+                if let Some(bar) = window_title_bar(ui, bar_title.clone()) {
+                    if bar.close {
+                        cx.request_close();
+                    }
+                    dock |= dropped_on_main(ui, id, bar.rect, dock_target);
+                    bar_rect = Some(bar.rect);
                 }
-                dock |= dropped_on_main(ui, id, bar.rect, dock_target);
-                bar_rect = Some(bar.rect);
-            }
-            // The window's status bar along its bottom, before the canvas takes the rest; a zoom typed into it applies
-            // to the view the canvas draws this pass.
-            let host = CanvasHost { idx: doc, window: Some(id) };
-            let shown = ToolHost::shown_space(ui.ctx(), host.canvas_id()).map(|space| space.view);
-            let edited = egui::Panel::bottom(egui::IdSalt::new(("floating document status", id)))
-                .resizable(false)
-                .frame(egui::Frame::NONE)
-                .show(ui, |ui| crate::panels::document_window_status(app, ui, doc, shown))
-                .inner;
-            if let Some(edited) = edited {
-                // The window's own scale, which its canvas builds its view with: it may sit on another display.
-                let ppp = ui.ctx().pixels_per_point();
-                view.set_from(&edited, ppp);
-            }
-            // A second run of the body in one pass continues from the first run's view; the wrap rule
-            // compares with the view the window started the pass with, so both runs file the same ask.
-            let (after, canvas) = document_window_canvas(app, ui, id, doc, view.clone(), focused);
-            // The view the window's canvas showed this pass, kept by the tool host that ran in it.
-            if wants_wrap(preference, &start, &after)
-                && let Some(drawn) = ToolHost::shown_space(ui.ctx(), host.canvas_id()).map(|space| space.view)
-            {
-                DocumentWindow::wrap_in(cx, canvas, wrapped_canvas(&drawn, doc_size, canvas));
-            }
-            view = after;
-        });
+                // The window's status bar along its bottom, before the canvas takes the rest; a zoom typed into it applies
+                // to the view the canvas draws this pass.
+                let host = CanvasHost { idx: doc, window: Some(id) };
+                let shown = ToolHost::shown_space(ui.ctx(), host.canvas_id()).map(|space| space.view);
+                let edited = egui::Panel::bottom(egui::IdSalt::new(("floating document status", id)))
+                    .resizable(false)
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| crate::panels::document_window_status(app, ui, doc, shown))
+                    .inner;
+                if let Some(edited) = edited {
+                    // The window's own scale, which its canvas builds its view with: it may sit on another display.
+                    let ppp = ui.ctx().pixels_per_point();
+                    view.set_from(&edited, ppp);
+                }
+                // A second run of the body in one pass continues from the first run's view; the wrap rule
+                // compares with the view the window started the pass with, so both runs file the same ask.
+                let (after, canvas) = document_window_canvas(app, ui, id, doc, view.clone(), focused);
+                // The view the window's canvas showed this pass, kept by the tool host that ran in it.
+                if wants_wrap(preference, &start, &after)
+                    && let Some(drawn) = ToolHost::shown_space(ui.ctx(), host.canvas_id()).map(|space| space.view)
+                {
+                    DocumentWindow::wrap_in(cx, canvas, wrapped_canvas(&drawn, doc_size, canvas));
+                }
+                view = after;
+            },
+        );
         let output = inner.output;
         dock |= os_move_dropped(app, ui.ctx(), id, output.response.id, bar_rect, dock_target);
         if dock {
@@ -126,6 +131,13 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             continue;
         }
         follow_os_window(app, ui.ctx(), id, output.response.id);
+        if let Some((_, r)) = app.ui.document_windows.floating.iter_mut().find(|(g, _)| g.id == id)
+            && WindowHost::of(ui.ctx()).viewport_of(output.response.id).is_none()
+            && output.response.rect.is_finite()
+            && output.response.rect.width() > 0.0
+        {
+            *r = output.response.rect;
+        }
         if output.close_requested.is_some() {
             if own {
                 // A New Window for Document is a second view: closing it leaves the document open.
@@ -138,8 +150,16 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 super::tabs::close_document(app, ui.ctx(), doc_id);
             }
         }
-        if output.focus_gained && app.session.active_index() != Some(doc) {
-            app.session.set_active(doc);
+        if output.focus_gained {
+            if app.session.active_index() != Some(doc) {
+                app.session.set_active(doc);
+            }
+            if let Some(pos) = app.ui.document_windows.floating.iter().position(|(g, _)| g.id == id)
+                && pos + 1 < app.ui.document_windows.floating.len()
+            {
+                let entry = app.ui.document_windows.floating.remove(pos);
+                app.ui.document_windows.floating.push(entry);
+            }
         }
         // A window that took the wanted size shows the whole image: centre it. One the work area capped
         // keeps the zoomed spot.
@@ -232,7 +252,12 @@ fn dropped_on_main(ui: &egui::Ui, window: u64, bar: Rect, target: Option<Rect>) 
 /// window keeps the normal rect.
 fn follow_os_window(app: &mut PhotocraftApp, ctx: &egui::Context, window: u64, container: egui::Id) {
     let host = WindowHost::of(ctx);
-    let Some(facts) = host.viewport_of(container).and_then(|viewport| host.facts(viewport)) else { return };
+    let viewport = host.viewport_of(container);
+    if let Some(vp) = viewport {
+        let key = egui::Id::unique(("floating document viewport", window));
+        ctx.data_mut(|d| d.insert_temp(key, vp));
+    }
+    let Some(facts) = viewport.and_then(|vp| host.facts(vp)) else { return };
     if facts.state != WindowState::Normal {
         return;
     }
@@ -247,6 +272,19 @@ fn follow_os_window(app: &mut PhotocraftApp, ctx: &egui::Context, window: u64, c
     {
         *rect = placed;
     }
+}
+
+/// The viewport facts for the floating window `window`, if it is rendered in an OS window.
+pub(crate) fn viewport_facts(ctx: &egui::Context, window: u64) -> Option<craft::ui::runtime::windows::WindowFacts> {
+    let key = egui::Id::unique(("floating document viewport", window));
+    let viewport = ctx.data(|d| d.get_temp::<egui::ViewportId>(key))?;
+    let host = WindowHost::of(ctx);
+    host.facts(viewport)
+}
+
+/// Whether the floating window `window` is currently minimized in its OS window.
+pub(crate) fn is_minimized(ctx: &egui::Context, window: u64) -> bool {
+    viewport_facts(ctx, window).is_some_and(|f| f.state == WindowState::Minimized)
 }
 
 /// The title bar of a floating document window with the app-drawn frame (`Frame::Integrated`, the default on Windows

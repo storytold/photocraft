@@ -1,6 +1,7 @@
 //! #589: layers dragged onto another document's tab, then dropped on its canvas, are copied there.
 
 use craft::behavior::kurbo::Point;
+use craft::ui::canvas::ToolHost;
 use egui::{Modifiers, PointerButton, Pos2, Rect, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -8,6 +9,7 @@ use photocraft_doc::LayerId;
 use serde_json::json;
 
 use crate::PhotocraftApp;
+use crate::canvas::CanvasHost;
 use crate::state::Tool;
 
 /// Document `d`'s view of `rect` (the canvas area, or a tile of it), as the transfer maps the pointer.
@@ -359,4 +361,561 @@ fn dropping_back_on_the_source_copies_nothing() {
     let docs = h.state().session.documents();
     assert_eq!((docs[0].doc.layers.len(), docs[1].doc.layers.len()), (2, 1));
     assert_eq!(h.state().session.active_index(), Some(0));
+}
+
+#[test]
+fn a_layers_panel_drag_with_floating_windows() {
+    let (mut h, _) = harness();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 2, "2 floating windows before drag");
+    let row = crate::layers_panel_nodes::row(&h, "paint").center();
+    // Start drag from the Layers panel
+    h.event(egui::Event::PointerMoved(row));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: row, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerMoved(row + vec2(-50.0, 0.0)));
+    h.run_steps(2);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 2);
+    let dest_rect = h.state().ui.document_windows.floating.iter().find(|(g, _)| g.documents.contains(&h.state().session.documents()[1].doc.id)).unwrap().1;
+    let target_center = dest_rect.center();
+    h.event(egui::Event::PointerMoved(target_center));
+    h.run_steps(2);
+    h.event(egui::Event::PointerButton { pos: target_center, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(4);
+    assert_eq!(h.state().session.documents()[1].doc.layers.len(), 2, "dest document should receive the dragged layer");
+    assert_eq!(h.state().session.documents()[1].doc.layers[1].name, "paint");
+    assert_eq!(h.state().session.active_index(), Some(1), "dest document becomes active after drop");
+    assert_eq!(h.state().session.documents()[0].doc.layers.len(), 2, "source retains its layers");
+    assert_eq!(h.state().ui.document_windows.floating.len(), 2, "floating windows remain open");
+}
+
+#[test]
+fn a_move_drag_between_floating_windows() {
+    let (mut h, paint) = harness();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 2);
+    // Position windows side-by-side so they don't occlude each other
+    h.state_mut().ui.document_windows.floating[0].1 = Rect::from_min_size(egui::pos2(50.0, 80.0), vec2(500.0, 400.0));
+    h.state_mut().ui.document_windows.floating[1].1 = Rect::from_min_size(egui::pos2(600.0, 80.0), vec2(500.0, 400.0));
+    // Set distinct views for source and destination floating windows
+    h.state_mut().ui.views[0].zoom = 1.5;
+    h.state_mut().ui.views[1].zoom = 2.0;
+    h.state_mut().ui.views[1].center = [35.0, 20.0];
+    h.state_mut().session.set_active(0);
+    h.state_mut().ui.tool = Tool::Move;
+    h.run_steps(4);
+    let before = source_square(&h, paint);
+    let host0 = CanvasHost::primary(h.state(), 0);
+    let view0 = ToolHost::shown_space(&h.ctx, host0.canvas_id()).unwrap().view;
+    let grab_doc = [9.0, 11.0];
+    let grab = to_screen(&view0, grab_doc[0], grab_doc[1]);
+
+    let host1 = CanvasHost::primary(h.state(), 1);
+    let view1 = ToolHost::shown_space(&h.ctx, host1.canvas_id()).unwrap().view;
+    assert_ne!(view0.zoom, view1.zoom, "source and destination views must have distinct zoom transforms");
+    // Known off-center drop point in destination document coordinates (dest-doc size is 60×50, center is (30, 25))
+    let drop_doc = [25.0, 35.0];
+    let drop = to_screen(&view1, drop_doc[0], drop_doc[1]);
+
+    drag_along(&mut h, &[grab, drop], Modifiers::NONE);
+    assert_eq!(h.state().session.documents()[1].doc.layers.len(), 2, "dest document should receive the dragged layer from move tool");
+    assert_eq!(h.state().session.documents()[1].doc.layers[1].name, "paint");
+
+    let (name, copied) = copy(&h);
+    assert_eq!(name, "paint");
+    let offset_x = (drop_doc[0] - grab_doc[0]).round() as i32;
+    let offset_y = (drop_doc[1] - grab_doc[1]).round() as i32;
+    let expected_bounds = before.translate(offset_x, offset_y);
+    let expected_rect =
+        Rect::from_min_max(egui::pos2(expected_bounds.x0 as f32, expected_bounds.y0 as f32), egui::pos2(expected_bounds.x1 as f32, expected_bounds.y1 as f32));
+    assert_eq!(copied, expected_rect, "copied layer bounds should match source bounds translated by drop-minus-grab offset");
+
+    assert_eq!(h.state().session.active_index(), Some(1), "dest document becomes active after drop");
+    assert_eq!(source_square(&h, paint), before, "the move transfer preserves the source layer");
+    assert_eq!(h.state().ui.document_windows.floating.len(), 2);
+}
+
+#[test]
+fn a_move_drag_from_docked_to_floating_window() {
+    let (mut h, paint) = harness();
+    let ctx = h.ctx.clone();
+    let dest_id = h.state().session.documents()[1].doc.id;
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatInWindow", json!({"document": dest_id.0})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 1);
+
+    // Position the floating window
+    let dest_rect = Rect::from_min_size(egui::pos2(600.0, 80.0), vec2(500.0, 400.0));
+    h.state_mut().ui.document_windows.floating[0].1 = dest_rect;
+    h.state_mut().ui.views[1].zoom = 2.0;
+    h.state_mut().ui.views[1].center = [35.0, 20.0];
+    h.state_mut().session.set_active(0);
+    h.state_mut().ui.tool = Tool::Move;
+    h.run_steps(4);
+
+    let before = source_square(&h, paint);
+    let host0 = CanvasHost::primary(h.state(), 0);
+    let view0 = ToolHost::shown_space(&h.ctx, host0.canvas_id()).unwrap().view;
+    let grab_doc = [9.0, 11.0];
+    let grab = to_screen(&view0, grab_doc[0], grab_doc[1]);
+
+    let host1 = CanvasHost::primary(h.state(), 1);
+    let view1 = ToolHost::shown_space(&h.ctx, host1.canvas_id()).unwrap().view;
+    let drop_doc = [25.0, 35.0];
+    let drop = to_screen(&view1, drop_doc[0], drop_doc[1]);
+
+    drag_along(&mut h, &[grab, drop], Modifiers::NONE);
+    assert_eq!(h.state().session.documents()[1].doc.layers.len(), 2, "dest document should receive the dragged layer from move tool");
+    assert_eq!(h.state().session.documents()[1].doc.layers[1].name, "paint");
+
+    let (name, copied) = copy(&h);
+    assert_eq!(name, "paint");
+    let offset_x = (drop_doc[0] - grab_doc[0]).round() as i32;
+    let offset_y = (drop_doc[1] - grab_doc[1]).round() as i32;
+    let expected_bounds = before.translate(offset_x, offset_y);
+    let expected_rect =
+        Rect::from_min_max(egui::pos2(expected_bounds.x0 as f32, expected_bounds.y0 as f32), egui::pos2(expected_bounds.x1 as f32, expected_bounds.y1 as f32));
+    assert_eq!(copied, expected_rect, "copied layer bounds should match source bounds translated by drop-minus-grab offset");
+
+    assert_eq!(h.state().session.active_index(), Some(1), "dest document becomes active after drop");
+    assert_eq!(source_square(&h, paint), before, "the move transfer preserves the source layer");
+    assert_eq!(h.state().ui.document_windows.floating.len(), 1);
+}
+
+#[test]
+fn a_move_drag_from_docked_to_floating_viewport_transfers_layer() {
+    let (mut h, paint) = harness();
+    let ctx = h.ctx.clone();
+    let dest_id = h.state().session.documents()[1].doc.id;
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatInWindow", json!({"document": dest_id.0})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 1);
+
+    let group_id = h.state().ui.document_windows.floating[0].0.id;
+    let dest_rect = Rect::from_min_size(egui::pos2(600.0, 80.0), vec2(500.0, 400.0));
+    h.state_mut().ui.document_windows.floating[0].1 = dest_rect;
+    h.state_mut().ui.views[1].zoom = 2.0;
+    h.state_mut().ui.views[1].center = [35.0, 20.0];
+    h.state_mut().session.set_active(0);
+    h.state_mut().ui.tool = Tool::Move;
+    h.run_steps(4);
+
+    let vp = egui::ViewportId::from_hash_of(("test-floating-vp", group_id));
+    let vp_key = egui::Id::unique(("floating document viewport", group_id));
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+
+    let mut viewports = egui::ViewportIdMap::default();
+    viewports.insert(
+        egui::ViewportId::ROOT,
+        egui::ViewportInfo { inner_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1440.0, 900.0))), ..Default::default() },
+    );
+    viewports
+        .insert(vp, egui::ViewportInfo { inner_rect: Some(dest_rect), outer_rect: Some(dest_rect), native_pixels_per_point: Some(1.0), ..Default::default() });
+
+    let before = source_square(&h, paint);
+    let host0 = CanvasHost::primary(h.state(), 0);
+    let view0 = ToolHost::shown_space(&h.ctx, host0.canvas_id()).unwrap().view;
+    let grab_doc = [9.0, 11.0];
+    let grab = to_screen(&view0, grab_doc[0], grab_doc[1]);
+
+    let host1 = CanvasHost::primary(h.state(), 1);
+    let view1 = ToolHost::shown_space(&h.ctx, host1.canvas_id()).unwrap().view;
+    let drop_doc = [25.0, 35.0];
+    let drop = to_screen(&view1, drop_doc[0], drop_doc[1]);
+
+    // Press and initiate drag in ROOT
+    h.event(egui::Event::PointerMoved(grab));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: grab, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+
+    // Release occurs in the floating viewport `vp` (e.g. Linux multi-window), not ROOT
+    let drop_local = drop - dest_rect.min.to_vec2();
+    let root_input = egui::RawInput { viewport_id: egui::ViewportId::ROOT, viewports: viewports.clone(), ..Default::default() };
+    let _ = h.ctx.run_ui(root_input, |_| {});
+
+    let vp_input = egui::RawInput {
+        viewport_id: vp,
+        viewports: viewports.clone(),
+        events: vec![
+            egui::Event::PointerMoved(drop_local),
+            egui::Event::PointerButton { pos: drop_local, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+        ],
+        ..Default::default()
+    };
+    let _ = h.ctx.run_ui(vp_input, |_| {});
+
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+    h.run_steps(4);
+
+    assert_eq!(h.state().session.documents()[1].doc.layers.len(), 2, "dest document should receive the dragged layer from move tool via floating viewport");
+    assert_eq!(h.state().session.documents()[1].doc.layers[1].name, "paint");
+
+    let (name, copied) = copy(&h);
+    assert_eq!(name, "paint");
+    // Dest doc is 60×50, layer is 10×10. Target receives the layer centered (min=(25, 20), max=(35, 30)).
+    assert_eq!(copied, Rect::from_min_max(egui::pos2(25.0, 20.0), egui::pos2(35.0, 30.0)));
+
+    assert_eq!(h.state().session.active_index(), Some(1), "dest document becomes active after drop");
+    assert_eq!(source_square(&h, paint), before, "the move transfer preserves the source layer");
+    assert_eq!(h.state().jobs.focus, None, "jobs.focus should be cleared after transfer");
+    assert_eq!(h.state().ui.document_windows.floating.len(), 1);
+}
+
+#[test]
+fn drop_target_at_uses_maximized_bounds_for_maximized_floating_window() {
+    let (mut h, _) = harness();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 2);
+
+    let group_id = h.state().ui.document_windows.floating[1].0.id;
+    let normal_rect = Rect::from_min_size(egui::pos2(50.0, 50.0), vec2(200.0, 200.0));
+    h.state_mut().ui.document_windows.floating[1].1 = normal_rect;
+
+    let vp = egui::ViewportId::from_hash_of(("test-maximized-vp", group_id));
+    let vp_key = egui::Id::unique(("floating document viewport", group_id));
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+
+    let max_rect = Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(1200.0, 900.0));
+    let mut viewports = egui::ViewportIdMap::default();
+    viewports.insert(
+        egui::ViewportId::ROOT,
+        egui::ViewportInfo { inner_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 900.0))), ..Default::default() },
+    );
+    viewports.insert(
+        vp,
+        egui::ViewportInfo {
+            inner_rect: Some(max_rect),
+            outer_rect: Some(max_rect),
+            maximized: Some(true),
+            native_pixels_per_point: Some(1.0),
+            ..Default::default()
+        },
+    );
+
+    let root_input = egui::RawInput { viewport_id: egui::ViewportId::ROOT, viewports: viewports.clone(), ..Default::default() };
+    let _ = h.ctx.run_ui(root_input, |_| {});
+    let input = egui::RawInput { viewport_id: vp, viewports, ..Default::default() };
+    let _ = h.ctx.run_ui(input, |_| {});
+
+    let vp_key = egui::Id::unique(("floating document viewport", group_id));
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+
+    let p = egui::pos2(400.0, 20.0);
+    assert!(!normal_rect.contains(p), "point is outside the normal placement rectangle");
+    assert!(max_rect.contains(p), "point is inside the maximized window rectangle");
+
+    let target = super::target_at(h.state(), p);
+    assert_eq!(target, Some((1, None)), "drop hits the maximized floating window despite stale normal placement rect");
+}
+
+#[test]
+fn drop_target_at_skips_minimized_floating_windows() {
+    let (mut h, _) = harness();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 2);
+
+    let group_id = h.state().ui.document_windows.floating[1].0.id;
+    let normal_rect = Rect::from_min_size(egui::pos2(50.0, 50.0), vec2(200.0, 200.0));
+    h.state_mut().ui.document_windows.floating[1].1 = normal_rect;
+
+    let vp = egui::ViewportId::from_hash_of(("test-minimized-vp", group_id));
+    let vp_key = egui::Id::unique(("floating document viewport", group_id));
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+
+    let mut viewports = egui::ViewportIdMap::default();
+    viewports.insert(
+        egui::ViewportId::ROOT,
+        egui::ViewportInfo { inner_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 900.0))), ..Default::default() },
+    );
+    viewports.insert(
+        vp,
+        egui::ViewportInfo {
+            inner_rect: Some(normal_rect),
+            outer_rect: Some(normal_rect),
+            minimized: Some(true),
+            native_pixels_per_point: Some(1.0),
+            ..Default::default()
+        },
+    );
+
+    let root_input = egui::RawInput { viewport_id: egui::ViewportId::ROOT, viewports: viewports.clone(), ..Default::default() };
+    let _ = h.ctx.run_ui(root_input, |_| {});
+    let input = egui::RawInput { viewport_id: vp, viewports, ..Default::default() };
+    let _ = h.ctx.run_ui(input, |_| {});
+
+    let vp_key = egui::Id::unique(("floating document viewport", group_id));
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+
+    let p = normal_rect.center();
+    let target = super::target_at(h.state(), p);
+    assert_ne!(target.map(|(d, _)| d), Some(1), "drop should not target a minimized floating window");
+}
+
+#[test]
+fn drop_target_at_translates_root_pointer_to_desktop_coordinates() {
+    let (mut h, _) = harness();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 2);
+
+    let group_id = h.state().ui.document_windows.floating[1].0.id;
+    let desktop_bounds = Rect::from_min_size(egui::pos2(500.0, 50.0), vec2(200.0, 200.0));
+    h.state_mut().ui.document_windows.floating[1].1 = desktop_bounds;
+
+    let vp = egui::ViewportId::from_hash_of(("test-desktop-vp", group_id));
+    let vp_key = egui::Id::unique(("floating document viewport", group_id));
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+
+    let root_origin = egui::pos2(100.0, 50.0);
+    let mut viewports = egui::ViewportIdMap::default();
+    viewports
+        .insert(egui::ViewportId::ROOT, egui::ViewportInfo { inner_rect: Some(Rect::from_min_size(root_origin, vec2(1200.0, 900.0))), ..Default::default() });
+    viewports.insert(
+        vp,
+        egui::ViewportInfo { inner_rect: Some(desktop_bounds), outer_rect: Some(desktop_bounds), native_pixels_per_point: Some(1.0), ..Default::default() },
+    );
+
+    let root_input = egui::RawInput { viewport_id: egui::ViewportId::ROOT, viewports: viewports.clone(), ..Default::default() };
+    let _ = h.ctx.run_ui(root_input, |_| {});
+    let input = egui::RawInput { viewport_id: vp, viewports, ..Default::default() };
+    let _ = h.ctx.run_ui(input, |_| {});
+
+    let vp_key = egui::Id::unique(("floating document viewport", group_id));
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+
+    let p = egui::pos2(450.0, 10.0);
+    assert!(!desktop_bounds.contains(p), "root-local p is outside desktop bounds");
+    assert!(desktop_bounds.contains(p + root_origin.to_vec2()), "translated desktop point is inside bounds");
+
+    let target = super::target_at(h.state(), p);
+    assert_eq!(target, Some((1, None)), "drop hits the floating window using translated desktop coordinates");
+}
+
+#[test]
+fn drop_clears_jobs_focus_when_destination_already_active() {
+    let (mut h, paint) = harness();
+    let ctx = h.ctx.clone();
+
+    // 1. Cross-document drop with dest already active:
+    h.state_mut().session.set_active(1);
+    let job = photocraft_engine::jobs::JobId(42);
+    h.state_mut().jobs.focus = Some(job);
+    assert_eq!(h.state().jobs.focus, Some(job));
+
+    let t = super::Transfer {
+        source: h.state().session.documents()[0].doc.id,
+        layers: vec![paint.0],
+        grab: None,
+        label: "paint".to_string(),
+        selection_only: false,
+    };
+    ctx.data_mut(|d| d.insert_temp(super::key(), t));
+
+    super::drop(h.state_mut(), &ctx, 1, super::DropTarget::Tab);
+    assert_eq!(h.state().jobs.focus, None, "jobs.focus should be cleared after cross-doc drop even when dest is already active");
+
+    // 2. Same-document drop with dest already active:
+    h.state_mut().session.set_active(0);
+    h.state_mut().jobs.focus = Some(job);
+    assert_eq!(h.state().jobs.focus, Some(job));
+
+    let t_same = super::Transfer {
+        source: h.state().session.documents()[0].doc.id,
+        layers: vec![paint.0],
+        grab: None,
+        label: "paint".to_string(),
+        selection_only: false,
+    };
+    ctx.data_mut(|d| d.insert_temp(super::key(), t_same));
+
+    super::drop(h.state_mut(), &ctx, 0, super::DropTarget::Canvas([10.0, 10.0]));
+    assert_eq!(h.state().jobs.focus, None, "jobs.focus should be cleared after same-doc drop when dest is already active");
+}
+
+#[test]
+fn drop_target_at_ignores_floating_canvas_when_outside_window_bounds() {
+    let (mut h, _) = harness();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 2);
+
+    let group_id = h.state().ui.document_windows.floating[1].0.id;
+    // Window 1 is placed far away on the desktop
+    let desktop_bounds = Rect::from_min_size(egui::pos2(1500.0, 500.0), vec2(400.0, 300.0));
+    h.state_mut().ui.document_windows.floating[1].1 = desktop_bounds;
+
+    let vp = egui::ViewportId::from_hash_of(("test-faraway-vp", group_id));
+    let vp_key = egui::Id::unique(("floating document viewport", group_id));
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+
+    let mut viewports = egui::ViewportIdMap::default();
+    viewports.insert(
+        egui::ViewportId::ROOT,
+        egui::ViewportInfo { inner_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 900.0))), ..Default::default() },
+    );
+    viewports.insert(
+        vp,
+        egui::ViewportInfo { inner_rect: Some(desktop_bounds), outer_rect: Some(desktop_bounds), native_pixels_per_point: Some(1.0), ..Default::default() },
+    );
+
+    let root_input = egui::RawInput { viewport_id: egui::ViewportId::ROOT, viewports: viewports.clone(), ..Default::default() };
+    let _ = h.ctx.run_ui(root_input, |_| {});
+    let input = egui::RawInput { viewport_id: vp, viewports, ..Default::default() };
+    let _ = h.ctx.run_ui(input, |_| {});
+
+    let vp_key = egui::Id::unique(("floating document viewport", group_id));
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+
+    // A pointer at (100, 100) on the root window might fall inside window 1's local canvas rect,
+    // but desktop_p (100, 100) is outside window 1's desktop bounds (1500, 500).
+    let p = egui::pos2(100.0, 100.0);
+    let target = super::target_at(h.state(), p);
+    assert_ne!(target.map(|(d, _)| d), Some(1), "drop at (100, 100) must not hit floating window located at (1500, 500)");
+}
+
+#[test]
+fn drop_target_at_uses_root_pointer_for_embedded_floating_windows() {
+    let (mut h, _) = harness();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 2);
+
+    let embedded_rect = Rect::from_min_size(egui::pos2(200.0, 100.0), vec2(300.0, 200.0));
+    h.state_mut().ui.document_windows.floating[1].1 = embedded_rect;
+
+    // Simulate root window having an offset on desktop
+    let root_origin = egui::pos2(500.0, 400.0);
+    let mut viewports = egui::ViewportIdMap::default();
+    viewports
+        .insert(egui::ViewportId::ROOT, egui::ViewportInfo { inner_rect: Some(Rect::from_min_size(root_origin, vec2(1200.0, 900.0))), ..Default::default() });
+    let root_input = egui::RawInput { viewport_id: egui::ViewportId::ROOT, viewports, ..Default::default() };
+    let _ = h.ctx.run_ui(root_input, |_| {});
+
+    // Embedded window has no viewport facts (it's embedded).
+    let p = egui::pos2(250.0, 150.0);
+    assert!(embedded_rect.contains(p), "root-local p is inside embedded_rect");
+    assert!(!embedded_rect.contains(p + root_origin.to_vec2()), "desktop_p is outside embedded_rect");
+
+    let target = super::target_at(h.state(), p);
+    assert_eq!(target.map(|(d, _)| d), Some(1), "drop hits embedded floating window using root-local coordinates");
+}
+
+fn same_size_harness() -> (Harness<'static, Box<PhotocraftApp>>, LayerId) {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 30, "name": "source-doc"})).unwrap();
+    let paint = LayerId(s.execute("layer.new.layer", json!({"name": "paint"})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("select.rect", json!({"x": 4, "y": 6, "width": 10, "height": 10})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("file.new", json!({"width": 40, "height": 30, "name": "dest-doc"})).unwrap();
+    s.set_active(0);
+    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        PhotocraftApp::with_context(cc.egui_ctx.clone(), s, crate::Services::default())
+    });
+    h.run_steps(8);
+    (h, paint)
+}
+
+#[test]
+fn frame_drop_always_centres_layer_even_on_same_size_documents() {
+    let (mut h, paint) = same_size_harness();
+    let ctx = h.ctx.clone();
+    let t = super::Transfer {
+        source: h.state().session.documents()[0].doc.id,
+        layers: vec![paint.0],
+        grab: None,
+        label: "paint".to_string(),
+        selection_only: false,
+    };
+    ctx.data_mut(|d| d.insert_temp(super::key(), t));
+
+    super::drop(h.state_mut(), &ctx, 1, super::DropTarget::Frame);
+
+    let (name, r) = copy(&h);
+    assert_eq!(name, "paint");
+    // Dest doc is 40×30, layer is 10×10. Centering puts it at min=(15, 10), max=(25, 20).
+    assert_eq!(r, Rect::from_min_max(egui::pos2(15.0, 10.0), egui::pos2(25.0, 20.0)));
+}
+
+#[test]
+fn tab_drop_preserves_position_on_same_size_documents() {
+    let (mut h, paint) = same_size_harness();
+    let ctx = h.ctx.clone();
+    let t = super::Transfer {
+        source: h.state().session.documents()[0].doc.id,
+        layers: vec![paint.0],
+        grab: None,
+        label: "paint".to_string(),
+        selection_only: false,
+    };
+    ctx.data_mut(|d| d.insert_temp(super::key(), t));
+
+    super::drop(h.state_mut(), &ctx, 1, super::DropTarget::Tab);
+
+    let (name, r) = copy(&h);
+    assert_eq!(name, "paint");
+    // Source was at (4, 6) to (14, 16); same-size tab drop keeps position.
+    assert_eq!(r, Rect::from_min_max(egui::pos2(4.0, 6.0), egui::pos2(14.0, 16.0)));
+}
+
+#[test]
+fn shift_canvas_drop_preserves_position_on_same_size_documents() {
+    let (mut h, paint) = same_size_harness();
+    h.event(egui::Event::ModifiersChanged(Modifiers::SHIFT));
+    h.run_steps(1);
+    let ctx = h.ctx.clone();
+    let t = super::Transfer {
+        source: h.state().session.documents()[0].doc.id,
+        layers: vec![paint.0],
+        grab: None,
+        label: "paint".to_string(),
+        selection_only: false,
+    };
+    ctx.data_mut(|d| d.insert_temp(super::key(), t));
+
+    super::drop(h.state_mut(), &ctx, 1, super::DropTarget::Canvas([30.0, 20.0]));
+
+    let (name, r) = copy(&h);
+    assert_eq!(name, "paint");
+    // Shift-drop on same size keeps original position.
+    assert_eq!(r, Rect::from_min_max(egui::pos2(4.0, 6.0), egui::pos2(14.0, 16.0)));
+}
+
+#[test]
+fn floating_window_frame_drop_centres_on_same_size_document() {
+    let (mut h, _) = same_size_harness();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 2);
+
+    let dest_rect = Rect::from_min_size(egui::pos2(500.0, 80.0), vec2(400.0, 300.0));
+    h.state_mut().ui.document_windows.floating[1].1 = dest_rect;
+    h.run_steps(2);
+
+    // Verify target_at returns (1, None) for frame point outside canvas
+    let frame_point = dest_rect.min + vec2(50.0, 5.0);
+    let target = super::target_at(h.state(), frame_point);
+    assert_eq!(target, Some((1, None)), "frame point hits floating window frame chrome without canvas point");
+
+    let row = crate::layers_panel_nodes::row(&h, "paint").center();
+    drag_along(&mut h, &[row, frame_point], Modifiers::NONE);
+
+    let (name, r) = copy(&h);
+    assert_eq!(name, "paint");
+    assert_eq!(r, Rect::from_min_max(egui::pos2(15.0, 10.0), egui::pos2(25.0, 20.0)));
 }
