@@ -746,6 +746,8 @@ mod dodge_bar_angle_pressure_tests;
 #[cfg(test)]
 mod eyedropper_context_menu_tests;
 #[cfg(test)]
+mod layer_style_submenu_separator_tests;
+#[cfg(test)]
 mod menu_automate_groups_tests;
 #[cfg(test)]
 mod paint_bucket_options_fields_tests;
