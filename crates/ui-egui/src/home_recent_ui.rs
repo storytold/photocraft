@@ -4,6 +4,12 @@
 //! picture (the live composite of an open document, or a bounded decode of the file on disk as a background job),
 //! the version of that picture, and what each action does.
 
+#[cfg(not(target_arch = "wasm32"))]
+use craft::host::{
+    Wake, default_jobs,
+    queue::{Finished, JobQueue, Priority, QueueOptions},
+};
+
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
@@ -26,10 +32,8 @@ const OPEN_DOC_REGEN_INTERVAL: std::time::Duration = std::time::Duration::from_m
 const OPEN_DOC_REGEN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// How long a stat of a file on disk stays valid: frames in between never touch the disk.
-#[cfg(all(not(target_arch = "wasm32"), not(test)))]
+#[cfg(not(target_arch = "wasm32"))]
 const RECHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
-#[cfg(all(not(target_arch = "wasm32"), test))]
-const RECHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 
 #[cfg(not(target_arch = "wasm32"))]
 fn load_thumbnail_catching_panic(load: impl FnOnce() -> Option<ColorImage>) -> Option<ColorImage> {
@@ -41,6 +45,7 @@ fn load_thumbnail_catching_panic(load: impl FnOnce() -> Option<ColorImage>) -> O
 struct DiskStamp {
     seen: Option<(Option<std::time::SystemTime>, u64)>,
     checked: std::time::Instant,
+    requested_frame: u64,
 }
 
 /// What the revision of one path is built from.
@@ -54,6 +59,11 @@ struct Stamp {
     /// The last stat of the file on disk.
     #[cfg(not(target_arch = "wasm32"))]
     disk: Option<DiskStamp>,
+    #[cfg(not(target_arch = "wasm32"))]
+    disk_pending: bool,
+    /// A focus gain can only be satisfied by a check requested in or after that frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    disk_focus_frame: Option<u64>,
 }
 
 impl Stamp {
@@ -80,15 +90,9 @@ impl Stamp {
         revision
     }
 
-    /// The revision of the file on disk, statted again only when the window gained focus or the last stat is older
-    /// than `RECHECK_INTERVAL`.
+    /// The version from the last completed stat.
     #[cfg(not(target_arch = "wasm32"))]
-    fn disk_revision(&mut self, path: &str, focus_gained: bool) -> Revision {
-        let due = focus_gained || self.disk.as_ref().is_none_or(|d| d.checked.elapsed() >= RECHECK_INTERVAL);
-        if due {
-            let seen = std::fs::metadata(path).ok().map(|m| (m.modified().ok(), m.len()));
-            self.disk = Some(DiskStamp { seen, checked: std::time::Instant::now() });
-        }
+    fn disk_revision(&self) -> Revision {
         match self.disk.as_ref().and_then(|d| d.seen) {
             Some((modified, len)) => Revision::of(&(self.generation, modified, len)),
             None => Revision::of(&(self.generation, "missing")),
@@ -97,8 +101,17 @@ impl Stamp {
 
     /// The web has no files to stat: the picture only follows its generation.
     #[cfg(target_arch = "wasm32")]
-    fn disk_revision(&mut self, _path: &str, _focus_gained: bool) -> Revision {
+    fn disk_revision(&self) -> Revision {
         Revision::of(&(self.generation, "web"))
+    }
+
+    fn invalidate(&mut self) {
+        *self = Stamp {
+            generation: self.generation + 1,
+            #[cfg(not(target_arch = "wasm32"))]
+            disk_pending: self.disk_pending,
+            ..Stamp::default()
+        };
     }
 }
 
@@ -107,21 +120,58 @@ impl Stamp {
 #[derive(Default)]
 pub(crate) struct ThumbnailCache {
     stamps: HashMap<String, Stamp>,
+    #[cfg(not(target_arch = "wasm32"))]
+    disk_checks: Option<JobQueue<String, (u64, DiskStamp)>>,
 }
 
 impl ThumbnailCache {
     /// Invalidate the cached thumbnail for a single path (e.g. after save, open, or remove).
     pub(crate) fn invalidate(&mut self, path: &str) {
-        let stamp = self.stamps.entry(path.to_string()).or_default();
-        // The generation survives: it is what makes the next revision differ from the one the store holds.
-        *stamp = Stamp { generation: stamp.generation + 1, ..Stamp::default() };
+        self.stamps.entry(path.to_owned()).or_default().invalidate();
     }
 
     /// Clear all cached thumbnails (e.g. on Clear Recent Files).
     pub(crate) fn clear(&mut self) {
         for stamp in self.stamps.values_mut() {
-            *stamp = Stamp { generation: stamp.generation + 1, ..Stamp::default() };
+            stamp.invalidate();
         }
+    }
+
+    /// A stat may wait for a network mount. Only a completed result changes the UI's revision.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn disk_revision(&mut self, path: &str, focus_gained: bool, ctx: &egui::Context) -> Revision {
+        let checks = self.disk_checks.get_or_insert_with(|| {
+            let ctx = ctx.clone();
+            JobQueue::new(default_jobs(), Wake::new(move || ctx.request_repaint()), QueueOptions { lanes: 2, name: "recent-file-stat" })
+        });
+
+        while let Some(Finished { key, result: (generation, info), .. }) = checks.try_recv() {
+            if let Some(stamp) = self.stamps.get_mut(&key) {
+                stamp.disk_pending = false;
+                if stamp.generation == generation {
+                    stamp.disk = Some(info);
+                }
+            }
+        }
+
+        let stamp = self.stamps.entry(path.to_owned()).or_default();
+        if focus_gained {
+            stamp.disk_focus_frame = Some(ctx.cumulative_frame_nr());
+        }
+        let due = stamp.disk.as_ref().is_none_or(|info| {
+            stamp.disk_focus_frame.is_some_and(|focus_frame| info.requested_frame < focus_frame) || info.checked.elapsed() >= RECHECK_INTERVAL
+        });
+        if due && !stamp.disk_pending {
+            stamp.disk_pending = true;
+            let generation = stamp.generation;
+            let requested_frame = ctx.cumulative_frame_nr();
+            let path = path.to_owned();
+            checks.submit(path.clone(), Priority::VISIBLE, move |_| {
+                let seen = std::fs::metadata(path).ok().map(|meta| (meta.modified().ok(), meta.len()));
+                (generation, DiskStamp { seen, checked: std::time::Instant::now(), requested_frame })
+            });
+        }
+        stamp.disk_revision()
     }
 }
 
@@ -135,15 +185,21 @@ pub(crate) struct RecentThumbs<'a> {
     docs: &'a [craft::ui::contract::Tracked<photocraft_engine::DocState>],
     cache: &'a Mutex<ThumbnailCache>,
     ctx: egui::Context,
+    #[cfg(not(target_arch = "wasm32"))]
     focus_gained: bool,
 }
 
-/// The thumbnail source of this pass. The focus gain is the frame's own `WindowFocused(true)` event, which egui
-/// gives only to the frame's first pass: a second pass sees no gain and applies the stats the first pass wrote (a
-/// path is statted at most once per `RECHECK_INTERVAL`, or once on a focus gain).
+/// The thumbnail source of this pass. Window focus triggers a recheck of the recent files.
 pub(crate) fn source<'a>(app: &'a PhotocraftApp, ctx: &egui::Context) -> RecentThumbs<'a> {
+    #[cfg(not(target_arch = "wasm32"))]
     let focus_gained = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(true))));
-    RecentThumbs { docs: app.session.documents(), cache: &app.thumbnail_cache, ctx: ctx.clone(), focus_gained }
+    RecentThumbs {
+        docs: app.session.documents(),
+        cache: &app.thumbnail_cache,
+        ctx: ctx.clone(),
+        #[cfg(not(target_arch = "wasm32"))]
+        focus_gained,
+    }
 }
 
 /// The thumbnails the Home screen stores its pictures in.
@@ -164,13 +220,20 @@ impl ThumbSource<ThumbKey> for RecentThumbs<'_> {
         let ThumbKey::Recent(path) = key else { return Revision::new(0) };
         let path = path.to_string_lossy();
         let mut cache = lock(self.cache);
-        let stamp = cache.stamps.entry(path.to_string()).or_default();
         // An open document's live picture wins over the file on disk.
         if let Some(st) = self.open_doc(&path) {
+            let stamp = cache.stamps.entry(path.into_owned()).or_default();
             let held = stamp.held_revision(st.revision, &self.ctx);
             return Revision::of(&(stamp.generation, held));
         }
-        stamp.disk_revision(&path, self.focus_gained)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            cache.disk_revision(&path, self.focus_gained, &self.ctx)
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            cache.stamps.entry(path.into_owned()).or_default().disk_revision()
+        }
     }
 
     fn render(&self, key: &ThumbKey, request: &ThumbRequest) -> ThumbRender {
@@ -496,6 +559,7 @@ mod tests {
     fn manual_recent_thumbnails(app: &PhotocraftApp) -> (craft::ui::testing::Frames, std::sync::Arc<craft::host::ManualJobs>) {
         let ctx = app.ctx().clone();
         let jobs = std::sync::Arc::new(craft::host::ManualJobs::new());
+        manual_disk_checks(app);
         // The production accessor uses this same salt; its later options keep this first-created loader.
         Thumbnails::<ThumbKey>::in_context(&ctx, "home-recent", ThumbnailOptions::new().lanes(1).jobs(jobs.clone()));
         let mut frames = craft::ui::testing::Frames::over(ctx);
@@ -528,6 +592,9 @@ mod tests {
         let key = ThumbKey::Recent(path);
         let (mut frames, jobs) = manual_recent_thumbnails(&app);
 
+        recent_thumbnail_pass(&app, &mut frames, &key);
+        assert_eq!(jobs.waiting(), 0, "the decoder waits for the file stat");
+        run_disk_check(&app);
         assert!(matches!(recent_thumbnail_pass(&app, &mut frames, &key), craft::ui::primitives::TextureState::Loading { stand_in: None, .. }));
         assert_eq!(jobs.waiting(), 1, "the real source returned a background decoder, rather than decoding inline");
         assert!(jobs.run_next(), "the queued decoder actually ran to completion");
@@ -551,6 +618,9 @@ mod tests {
         let key = ThumbKey::Recent(path);
         let (mut frames, jobs) = manual_recent_thumbnails(&app);
 
+        recent_thumbnail_pass(&app, &mut frames, &key);
+        assert_eq!(jobs.waiting(), 0, "the decoder waits for the file stat");
+        run_disk_check(&app);
         assert!(matches!(recent_thumbnail_pass(&app, &mut frames, &key), craft::ui::primitives::TextureState::Loading { .. }));
         let before = revision_of(&app, &path_string);
         assert!(jobs.run_next(), "finish the actual decoder before invalidation and before its result is uploaded");
@@ -560,11 +630,12 @@ mod tests {
         // Check invalidation with unchanged metadata first, then make stale and fresh decoder pixels distinct.
         std::fs::write(&path_string, flat_png([20, 100, 60, 255])).unwrap();
 
-        // The former picture may be a stand-in, but it cannot satisfy the invalidated revision as Ready.
         assert!(
-            matches!(recent_thumbnail_pass(&app, &mut frames, &key), craft::ui::primitives::TextureState::Loading { .. }),
-            "the completed old result is not current"
+            !matches!(recent_thumbnail_pass(&app, &mut frames, &key), craft::ui::primitives::TextureState::Ready(_)),
+            "the completed old result is not current while the next stat is pending"
         );
+        run_disk_check(&app);
+        assert!(matches!(recent_thumbnail_pass(&app, &mut frames, &key), craft::ui::primitives::TextureState::Loading { .. }));
         assert_eq!(jobs.waiting(), 1, "the production source requests a replacement decoder");
         assert!(jobs.run_next(), "the replacement decoder completes");
         let state = recent_thumbnail_pass(&app, &mut frames, &key);
@@ -579,6 +650,25 @@ mod tests {
     fn revision_of(app: &PhotocraftApp, path: &str) -> Revision {
         let ctx = app.ctx().clone();
         source(app, &ctx).revision(&ThumbKey::Recent(PathBuf::from(path)), &ThumbRequest::for_cell(64.0, 1.0))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn manual_disk_checks(app: &PhotocraftApp) {
+        lock(&app.thumbnail_cache).disk_checks =
+            Some(JobQueue::new(std::sync::Arc::new(craft::host::InlineJobs), Wake::new(|| {}), QueueOptions { lanes: 0, name: "test-recent-file-stat" }));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn run_disk_check(app: &PhotocraftApp) {
+        let cache = lock(&app.thumbnail_cache);
+        assert_eq!(cache.disk_checks.as_ref().unwrap().run_inline(1), 1);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn expire_disk_stamp(app: &PhotocraftApp, path: &str) {
+        let mut cache = lock(&app.thumbnail_cache);
+        let checked = &mut cache.stamps.get_mut(path).unwrap().disk.as_mut().unwrap().checked;
+        *checked -= RECHECK_INTERVAL;
     }
 
     /// An app with a 64 x 64 document open at `path`, at document revision 0.
@@ -649,6 +739,81 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn recent_thumbnail_revision_does_not_read_metadata_in_place() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("recent.png");
+        std::fs::write(&path, flat_png([255, 0, 0, 255])).unwrap();
+        let path = path.to_str().unwrap();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.push_recent(path);
+
+        manual_disk_checks(&app);
+
+        let pending = revision_of(&app, path);
+        assert_eq!(revision_of(&app, path), pending, "Home can ask again while the first check is pending");
+        {
+            let cache = lock(&app.thumbnail_cache);
+            assert!(cache.stamps[path].disk.is_none(), "the first Home pass schedules the stat instead of taking its result");
+            assert_eq!(cache.disk_checks.as_ref().unwrap().counts().queued, 1, "one job is queued during repeated requests");
+        }
+
+        run_disk_check(&app);
+        lock(&app.thumbnail_cache).invalidate(path);
+        let invalidated = revision_of(&app, path);
+        assert!(lock(&app.thumbnail_cache).stamps[path].disk.is_none(), "invalidating a path drops the pending result");
+        run_disk_check(&app);
+        assert_ne!(revision_of(&app, path), invalidated, "Home sees the valid result on the next pass");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn recent_thumbnail_rechecks_after_a_pending_stat_overlaps_window_focus() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("recent.png");
+        std::fs::write(&file, flat_png([255, 0, 0, 255])).unwrap();
+        let path = file.to_str().unwrap();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.push_recent(path);
+        manual_disk_checks(&app);
+        revision_of(&app, path);
+        run_disk_check(&app);
+        let before = revision_of(&app, path);
+        expire_disk_stamp(&app, path);
+
+        let ctx = app.ctx().clone();
+        crate::testing::run_ui(&ctx, egui::RawInput::default(), |_| {
+            assert_eq!(revision_of(&app, path), before);
+            // The manual queue holds this already-sampled result until the test lets it finish.
+            let meta = std::fs::metadata(&file).unwrap();
+            let info =
+                DiskStamp { seen: Some((meta.modified().ok(), meta.len())), checked: std::time::Instant::now(), requested_frame: ctx.cumulative_frame_nr() };
+            let cache = lock(&app.thumbnail_cache);
+            let generation = cache.stamps[path].generation;
+            cache.disk_checks.as_ref().unwrap().submit(path.to_owned(), Priority::VISIBLE, move |_| (generation, info));
+        });
+        std::fs::remove_file(&file).unwrap();
+
+        let input = egui::RawInput { events: vec![egui::Event::WindowFocused(true)], ..Default::default() };
+        crate::testing::run_ui(&ctx, input, |_| {
+            assert_eq!(revision_of(&app, path), before, "the previous picture stays while the stat is pending");
+            assert_eq!(revision_of(&app, path), before, "another request during the same focus frame keeps the picture");
+            assert_eq!(lock(&app.thumbnail_cache).disk_checks.as_ref().unwrap().counts().queued, 1);
+        });
+
+        run_disk_check(&app);
+        crate::testing::run_ui(&ctx, egui::RawInput::default(), |_| {
+            assert_eq!(revision_of(&app, path), before, "the old sample still describes the old picture");
+        });
+        assert_eq!(lock(&app.thumbnail_cache).disk_checks.as_ref().unwrap().counts().queued, 1, "the focus request survives publication of an earlier stat");
+        run_disk_check(&app);
+        let missing = revision_of(&app, path);
+        assert_ne!(missing, before, "the post-focus stat sees the removal");
+        assert_eq!(revision_of(&app, path), missing);
+        assert_eq!(lock(&app.thumbnail_cache).disk_checks.as_ref().unwrap().counts().queued, 0, "the focus request ran once");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn recent_thumbnail_regenerates_when_disk_file_changes() {
         let temp_dir = std::env::temp_dir().join(format!("photocraft_thumb_test_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
@@ -658,6 +823,9 @@ mod tests {
 
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.push_recent(&path_str);
+        manual_disk_checks(&app);
+        revision_of(&app, &path_str);
+        run_disk_check(&app);
         let before = revision_of(&app, &path_str);
 
         // A larger multi-colour PNG changes the size on disk.
@@ -669,8 +837,9 @@ mod tests {
         let bigger = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &photocraft_codecs::EncodeOptions::default()).unwrap();
         std::fs::write(&file_path, bigger).unwrap();
 
-        // Let the recheck interval elapse (10 ms in tests).
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        expire_disk_stamp(&app, &path_str);
+        assert_eq!(revision_of(&app, &path_str), before, "the old picture stays during the check");
+        run_disk_check(&app);
         assert_ne!(before, revision_of(&app, &path_str), "the revision must follow the file's new size");
 
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -687,6 +856,9 @@ mod tests {
 
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.push_recent(&path_str);
+        manual_disk_checks(&app);
+        revision_of(&app, &path_str);
+        run_disk_check(&app);
         let first = revision_of(&app, &path_str);
 
         // A stat would see the missing file and change the revision, so an unchanged one inside the interval
@@ -694,8 +866,13 @@ mod tests {
         std::fs::remove_file(&file_path).unwrap();
         assert_eq!(revision_of(&app, &path_str), first, "a pass within the recheck interval must not touch the disk");
 
-        std::thread::sleep(RECHECK_INTERVAL + std::time::Duration::from_millis(10));
-        assert_ne!(revision_of(&app, &path_str), first, "after the interval the missing file is seen");
+        expire_disk_stamp(&app, &path_str);
+        assert_eq!(revision_of(&app, &path_str), first);
+        run_disk_check(&app);
+        let missing = revision_of(&app, &path_str);
+        assert_ne!(missing, first, "the failed check replaces the disk state");
+        assert_eq!(revision_of(&app, &path_str), missing, "a failed check waits for the same recheck interval");
+        assert_eq!(lock(&app.thumbnail_cache).disk_checks.as_ref().unwrap().counts().queued, 0);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
