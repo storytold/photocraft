@@ -21,7 +21,8 @@ fn first_open_shows_the_reference_defaults() {
 
 #[test]
 fn file_type_offers_jpg_png_psd_tiff_without_same() {
-    let rows = super::rows(".".into());
+    let app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let rows = super::rows(&app);
     let row = rows.iter().find(|p| p.key == "format").expect("a File Type row");
     let ParamKind::Choice { options, .. } = &row.kind else { panic!("File Type is a list") };
     let entries: Vec<(&str, &str)> = options.iter().map(|(id, label)| (id.as_str(), label.as_str())).collect();
@@ -34,7 +35,7 @@ fn ok_on_the_defaults_saves_psd() {
     let (mut h, id) = opened();
     let dir = source_folder();
     let out = dir.path().join("out");
-    set(&mut h, id, "input", json!(dir.path().to_string_lossy()));
+    set(&mut h, id, "input", json!({"files": [dir.path().join("a.png")], "useFolder": false}));
     set(&mut h, id, "output", json!(out.to_string_lossy()));
     crate::dialogs::testing::confirm(h.state_mut(), id).expect("OK is accepted");
     h.run_steps(4);
