@@ -383,6 +383,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                 ),
                 // Unticked on first open; the form remembers it as the last run left it (#13644).
                 Param::new("reversePageOrder", tl!("Reverse Page Order"), ParamKind::bool(false)),
+                Param::new("includeIcc", tl!("Include ICC Profile"), ParamKind::bool(true)),
             ])
         }
         "file.export.dataSetsAsFiles" => {
