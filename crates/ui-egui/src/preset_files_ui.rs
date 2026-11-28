@@ -17,7 +17,7 @@ use crate::panel_docking::show_panel;
 /// the Swatches panel through [`crate::swatches_ui::import_bytes`]).
 /// `.psp` is Photoshop's live `Keyboard Shortcuts.psp` (the same XML as a `.kys`); other `.psp`
 /// settings files are refused with a clear message.
-pub const PRESET_EXTS: &[&str] = &["abr", "grd", "asl", "pat", "aco", "act", "ase", "kys", "psp"];
+pub const PRESET_EXTS: &[&str] = &["abr", "grd", "asl", "pat", "aco", "act", "ase", "kys", "psp", "csh"];
 
 fn ext(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
@@ -84,6 +84,23 @@ fn source(name: &str, bytes: &[u8]) -> Value {
     json!({"data": photocraft_engine::paint::tile::b64_encode(bytes)})
 }
 
+/// Import a custom-shape set from the Shapes panel using the normal preset route.
+pub(crate) fn import_shapes_dialog(app: &mut PhotocraftApp) {
+    let result = app.pick_file_bytes_filtered(&["csh"], |app, name, bytes| {
+        if ext(&name) != "csh" {
+            return Err(tl!("Choose a custom shape file (.csh).").into());
+        }
+        open(app, &name, &bytes).ok_or_else(|| tl!("Choose a custom shape file (.csh).").to_string())??;
+        Ok(Value::Null)
+    });
+    if let Err(error) = result
+        && error != crate::file_dialog::CANCELLED
+    {
+        app.ui.status = error;
+        app.ui.status_error = true;
+    }
+}
+
 /// Import a preset file; `None` when `name` isn't one.
 pub fn open(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Option<Result<(), String>> {
     let (cmd, what) = match ext(name).as_str() {
@@ -91,6 +108,7 @@ pub fn open(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Option<Result<
         "grd" => ("gradient.presets.importGrd", "gradients"),
         "asl" => ("style.presets.importAsl", "styles"),
         "pat" => ("pattern.import", "patterns"),
+        "csh" => ("shape.presets.importCsh", "shapes"),
         "aco" | "act" | "ase" => return Some(crate::swatches_ui::import_bytes(app, name, bytes, false).map(|_| ())),
         "kys" | "psp" => return Some(crate::kys_import::open_bytes(app, name, bytes).map(|_| ())),
         _ => return None,
@@ -131,16 +149,26 @@ pub(crate) fn run_import(app: &mut PhotocraftApp, cmd: &str, what: &str, stem: &
         let n = r.get("count").and_then(Value::as_u64).unwrap_or(0);
         let warnings: Vec<String> = r.get("warnings").and_then(|w| serde_json::from_value(w.clone()).ok()).unwrap_or_default();
         app.ui.status_error = false;
-        let (one, other) = match what {
-            "brushes" => ("Imported {n} brush from {file}", "Imported {n} brushes from {file}"),
-            "styles" => ("Imported {n} style from {file}", "Imported {n} styles from {file}"),
-            "patterns" => ("Imported {n} pattern from {file}", "Imported {n} patterns from {file}"),
-            _ => ("Imported {n} gradient from {file}", "Imported {n} gradients from {file}"),
+        // Shape import may suffix the group when that name is taken. Report the group that
+        // was stored, which the background job path already does.
+        let reported_group = r.get("group").and_then(Value::as_str).filter(|g| !g.is_empty());
+        let (one, other, slot, shown) = if what == "shapes" {
+            ("Imported {n} shape from {group}", "Imported {n} shapes from {group}", "group", reported_group.unwrap_or(stem))
+        } else {
+            let (one, other) = match what {
+                "brushes" => ("Imported {n} brush from {file}", "Imported {n} brushes from {file}"),
+                "styles" => ("Imported {n} style from {file}", "Imported {n} styles from {file}"),
+                "patterns" => ("Imported {n} pattern from {file}", "Imported {n} patterns from {file}"),
+                _ => ("Imported {n} gradient from {file}", "Imported {n} gradients from {file}"),
+            };
+            (one, other, "file", stem)
         };
-        let imported = crate::i18n::fmt(&crate::i18n::trn(crate::i18n::current(), n, one, other), &[("file", stem)]);
+        let imported = crate::i18n::fmt(&crate::i18n::trn(crate::i18n::current(), n, one, other), &[(slot, shown)]);
         // Name the group too when it isn't the file's: "Kit (2)" beside an existing "Kit" (#10640).
         let imported = match r.get("group").and_then(Value::as_str) {
-            Some(group) if group != stem.trim() => crate::i18n::fmt(tl!("{message} into “{group}”"), &[("message", &imported), ("group", group)]),
+            Some(group) if what != "shapes" && group != stem.trim() => {
+                crate::i18n::fmt(tl!("{message} into “{group}”"), &[("message", &imported), ("group", group)])
+            }
             _ => imported,
         };
         app.ui.status = match warnings.first() {
@@ -153,6 +181,9 @@ pub(crate) fn run_import(app: &mut PhotocraftApp, cmd: &str, what: &str, stem: &
         if what == "brushes" {
             // Show them: Brush Settings › Brushes tab.
             let _ = show_panel(app, "brushes", Some(true));
+        }
+        if what == "shapes" {
+            let _ = show_panel(app, "shapes", Some(true));
         }
         if what == "styles" {
             let _ = show_panel(app, "styles", Some(true));
@@ -170,6 +201,20 @@ mod tests {
 
     use super::*;
     use crate::panel_docking::is_shown;
+
+    #[test]
+    fn recognises_preset_files() {
+        assert!(is_preset_file("/a/b/Set.ABR"));
+        assert!(is_preset_file("sunsets.grd"));
+        assert!(is_preset_file("Comic Styles.ASL"));
+        assert!(is_preset_file("Brand.ACO"));
+        assert!(is_preset_file("Palette.ACT"));
+        assert!(is_preset_file("exchange.ase"));
+        assert!(is_preset_file("Debaser-ColourLibrary-Part6.PAT"));
+        assert!(is_preset_file("Original.CSH"));
+        assert!(!is_preset_file("photo.psd"));
+        assert!(!is_preset_file("abr"));
+    }
 
     /// The open prompt that asks what to do with a preset group the import clashes with.
     fn prompt(app: &PhotocraftApp) -> Option<DialogId> {
@@ -191,6 +236,90 @@ mod tests {
             }
             other => panic!("the preset prompt has no `{other}` button"),
         }
+    }
+
+    fn triangle_csh() -> Vec<u8> {
+        let mut out = b"cush".to_vec();
+        out.extend_from_slice(&2u32.to_be_bytes());
+        out.extend_from_slice(&1u32.to_be_bytes());
+        let name: Vec<u16> = "Triangle".encode_utf16().chain(std::iter::once(0)).collect();
+        out.extend_from_slice(&(name.len() as u32).to_be_bytes());
+        for unit in &name {
+            out.extend_from_slice(&unit.to_be_bytes());
+        }
+        if !name.len().is_multiple_of(2) {
+            out.extend_from_slice(&[0, 0]);
+        }
+        out.extend_from_slice(&1u32.to_be_bytes());
+        let mut body = vec![36];
+        body.extend_from_slice(b"00000000-0000-4000-8000-000000000001");
+        for bound in [0i32, 0, 100, 200] {
+            body.extend_from_slice(&bound.to_be_bytes());
+        }
+        for selector in [6u16, 8] {
+            body.extend_from_slice(&selector.to_be_bytes());
+            body.extend_from_slice(&[0; 24]);
+        }
+        let polygon = [(0.25f64, 0.25f64), (0.75, 0.25), (0.5, 0.75)];
+        body.extend_from_slice(&0u16.to_be_bytes());
+        body.extend_from_slice(&(polygon.len() as u16).to_be_bytes());
+        body.extend_from_slice(&[0; 22]);
+        for &(x, y) in &polygon {
+            body.extend_from_slice(&2u16.to_be_bytes());
+            for _ in 0..3 {
+                body.extend_from_slice(&((y * 16_777_216.0) as i32).to_be_bytes());
+                body.extend_from_slice(&((x * 16_777_216.0) as i32).to_be_bytes());
+            }
+        }
+        while !body.len().is_multiple_of(4) {
+            body.push(0);
+        }
+        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        out.extend_from_slice(&body);
+        out
+    }
+
+    #[test]
+    fn csh_open_imports_presets_and_shows_shapes_without_opening_a_document() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        open(&mut app, "Original.CSH", &triangle_csh()).unwrap().unwrap();
+        assert!(app.session.active().is_none());
+        assert!(is_shown(&app, "shapes"));
+        assert!(!app.ui.status_error);
+        let imported = app.session.presets.shapes.iter().find(|g| g.name == "Original").unwrap();
+        assert_eq!(imported.items.len(), 1);
+        assert_eq!(imported.items[0].name, "Triangle");
+        assert_eq!(app.ui.status, "Imported 1 shape from Original");
+        open(&mut app, "Original.CSH", &triangle_csh()).unwrap().unwrap();
+        assert_eq!(app.ui.status, "Imported 1 shape from Original 1");
+        assert!(app.session.presets.shapes.iter().any(|g| g.name == "Original 1"));
+    }
+
+    #[test]
+    fn malformed_csh_open_preserves_the_library() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let before = app.session.presets.to_json(&app.session);
+        assert!(open(&mut app, "broken.csh", b"cush").unwrap().is_err());
+        assert_eq!(app.session.presets.to_json(&app.session), before);
+        assert!(app.session.active().is_none());
+    }
+
+    #[test]
+    fn import_shapes_dialog_requests_csh_and_imports() {
+        let files = Arc::new(ScriptedFiles::answering([Picked::Contents(vec![("Original.csh".into(), triangle_csh())])]));
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { files: Some(files.clone()), ..Default::default() });
+        app.session.presets.shapes.clear();
+        import_shapes_dialog(&mut app);
+        app.poll_file_dialog();
+        match files.requests().as_slice() {
+            [request] if request.kind == PickKind::Open => {
+                let [filter] = request.filters.as_slice() else { panic!("one filtered type, got {:?}", request.filters) };
+                assert_eq!(filter.extensions, ["csh"]);
+            }
+            other => panic!("expected one filtered open request, got {other:?}"),
+        }
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        assert_eq!(app.session.presets.shapes[0].items[0].name, "Triangle");
     }
 
     /// Opening `Kit.abr` when the library has a "Kit" group of the user's asks first: Import as

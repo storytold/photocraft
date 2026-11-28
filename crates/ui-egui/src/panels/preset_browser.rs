@@ -676,6 +676,9 @@ fn shape_thumb(inputs: &PanelInputs<Vec<Swatch>>, cx: &ContentPainterCx, rect: R
 /// Window › Shapes: a click picks the shape for the Custom Shape tool, a double click places it, and a drop on the
 /// canvas places it where it lands.
 pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if ui.button(tl!("Import Shapes…")).clicked() {
+        crate::preset_files_ui::import_shapes_dialog(app);
+    }
     let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
     let folders: Vec<Folder> = groups
         .iter()
