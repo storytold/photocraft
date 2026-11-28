@@ -309,6 +309,9 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
         s.set_sampler_map(photocraft_geom::Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] });
     }
     s.edit("Image Size", |doc, _| {
+        // Image Size clears the active Ruler Tool line for both resampled and resolution-only
+        // changes, while keeping the measurement scale and logged rows (#16545).
+        doc.measurement.ruler = None;
         if let Some(r) = dpi {
             // Type keeps its pixel size; resampling below then scales it with the pixels.
             crate::canvas_geom::set_resolution(doc, r as f32);

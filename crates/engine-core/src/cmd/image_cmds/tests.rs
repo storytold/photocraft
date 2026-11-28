@@ -917,6 +917,36 @@ fn thirty_two_bit_holds_linear_light() {
 }
 
 #[test]
+fn image_size_clears_ruler_line_for_resampled_and_resolution_only_changes() {
+    for (params, redraw_end, want_len) in [
+        (json!({"width": 320, "height": 240, "resolution": 72, "resample": "nearest"}), [116, 64], 25.0),
+        (json!({"resolution": 144, "resample": "none"}), [66, 64], 12.5),
+    ] {
+        let mut s = crate::session();
+        s.execute("file.new", json!({"width": 160, "height": 120, "background": "white"})).unwrap();
+        s.execute("image.analysis.setMeasurementScale", json!({"preset": "custom", "pixelLength": 20, "logicalLength": 5, "units": "mm"})).unwrap();
+        s.execute("image.analysis.rulerTool", json!({"start": [16, 64], "end": [66, 64]})).unwrap();
+        s.execute("image.analysis.recordMeasurements", json!({"source": "ruler"})).unwrap();
+
+        s.execute("image.imageSize", params).unwrap();
+        let info = s.execute("image.analysis.info", json!({})).unwrap();
+        assert!(info["ruler"].is_null(), "Image Size must clear the active ruler line: {info}");
+        assert_eq!(info["scale"]["units"].as_str(), Some("mm"), "calibration must be retained");
+        assert!(s.execute("image.analysis.recordMeasurements", json!({"source": "ruler"})).is_err());
+        let rows = s.execute("measurementLog.list", json!({})).unwrap();
+        assert_eq!(rows["rows"].as_array().map(Vec::len), Some(1), "prior row stays, no new row added");
+
+        // Drawing a fresh ruler works with the retained scale.
+        s.execute("image.analysis.rulerTool", json!({"start": [16, 64], "end": redraw_end})).unwrap();
+        s.execute("image.analysis.recordMeasurements", json!({"source": "ruler"})).unwrap();
+        let rows = s.execute("measurementLog.list", json!({})).unwrap();
+        assert_eq!(rows["rows"].as_array().map(Vec::len), Some(2));
+        let len = rows["rows"][1]["values"]["length"].as_f64().unwrap();
+        assert!((len - want_len).abs() < 1e-6, "redrawn ruler length {len} vs {want_len}");
+    }
+}
+
+#[test]
 fn grayscale_conversion_matches_photoshop() {
     // Photoshop 27.11, default Color Settings (working gray Dot Gain 20 %): Image > Mode >
     // Grayscale turns sRGB 64 / 128 / 192 grey and pure red into 46 / 105 / 177 / 107.
