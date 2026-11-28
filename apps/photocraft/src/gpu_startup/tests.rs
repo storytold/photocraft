@@ -271,14 +271,14 @@ fn auto_on_windows_with_an_intel_adapter_leaves_vulkan_out_of_the_instance() {
     const AMD: u32 = 0x1002;
     const WARP: u32 = 0x1414;
     let auto = plan(Auto, None, None, false, Os::Windows);
-    let dx12_gl = Some(wgpu::Backends::DX12 | wgpu::Backends::GL);
-    assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![INTEL, WARP]), dx12_gl);
+    let dx12 = Some(wgpu::Backends::DX12);
+    assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![INTEL, WARP]), dx12);
     // Intel iGPU + discrete GPU: the discrete GPU is then used on DX12.
-    assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![NVIDIA, INTEL, WARP]), dx12_gl);
-    // No Intel adapter: egui's default backends, Vulkan included.
-    assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![NVIDIA, WARP]), None);
-    assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![AMD]), None);
-    assert_eq!(windows_auto_backends(&auto, Os::Windows, Vec::new), None);
+    assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![NVIDIA, INTEL, WARP]), dx12);
+    // No Intel adapter: Vulkan stays in (see the GL test below for why GL doesn't).
+    let dx12_vulkan = Some(wgpu::Backends::DX12 | wgpu::Backends::VULKAN);
+    assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![NVIDIA, WARP]), dx12_vulkan);
+    assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![AMD]), dx12_vulkan);
     // `WGPU_BACKEND`, `--safe-gpu`, a chosen backend, a crash fallback and other platforms
     // don't list the DX12 adapters at all.
     let not_listed = || -> Vec<u32> { panic!("DX12 adapters listed") };
@@ -298,6 +298,25 @@ fn auto_on_windows_with_an_intel_adapter_leaves_vulkan_out_of_the_instance() {
     assert_eq!(i, 0);
     assert_eq!(dx12_default_applied(&listed, i, Os::Windows, true), Some("Intel"));
     assert_eq!(dx12_default_applied(&listed, i, Os::Windows, false), None);
+}
+
+/// #15304: GL's instance on Windows keeps a hidden window on a thread that never reads messages,
+/// so a keyboard layout switch while the Save dialog was open froze the app. `auto` on Windows
+/// leaves GL out whenever DX12 lists an adapter, and keeps it as the last resort when none does.
+#[test]
+fn auto_on_windows_leaves_gl_out_when_dx12_has_an_adapter() {
+    use wgpu::{Backend as B, DeviceType as T};
+    const NVIDIA: u32 = 0x10de;
+    const WARP: u32 = 0x1414;
+    let auto = plan(Auto, None, None, false, Os::Windows);
+    for vendors in [vec![NVIDIA, WARP], vec![INTEL, WARP], vec![WARP]] {
+        let b = windows_auto_backends(&auto, Os::Windows, || vendors.clone()).expect("backends chosen");
+        assert!(!b.contains(wgpu::Backends::GL), "{vendors:x?}: {b:?}");
+    }
+    assert_eq!(windows_auto_backends(&auto, Os::Windows, Vec::new), None, "no DX12 adapter: GL stays the last resort");
+    // Leaving GL out changes no choice: even WARP wins over a hardware GL adapter.
+    let listed = [cand(NVIDIA, T::DiscreteGpu, B::Gl), cand(WARP, T::Cpu, B::Dx12)];
+    assert_eq!(pick(&listed, Auto, Os::Windows), Some(1));
 }
 
 #[test]
