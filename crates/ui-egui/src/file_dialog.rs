@@ -379,7 +379,7 @@ impl PhotocraftApp {
             for (seq, path) in paths.iter().enumerate() {
                 let order = crate::jobs_ui::OpenOrder { batch, seq };
                 if let Err(e) = crate::jobs_ui::start_open_as_smart_object(app, path, Some(order)) {
-                    app.open_failed(&crate::file_open::display_name(path), &e);
+                    app.open_failed(path, &e);
                 }
             }
             crate::jobs_ui::end_batch(app);

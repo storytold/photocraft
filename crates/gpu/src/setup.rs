@@ -4,7 +4,7 @@ use super::kit::{Kit, tex_entry, uniform_entry};
 use super::paging::{cell_rect, field_reaches, first_error, grid_rects};
 use super::pipelines::{NO_EFFECT_MAPS, Pipelines};
 use super::textures::{FxEntry, Resident, Tex, TexKind};
-use super::{Compositor, DeviceHealth, DocId, Document, Fault, HashMap, LayerContent, Plan, Rect, Role, TILE_SIZE, Unsupported, fx, plan, prefix, timing};
+use super::{Compositor, DeviceHealth, DocId, Document, Fault, HashMap, Plan, Rect, Role, TILE_SIZE, Unsupported, fx, plan, prefix, timing};
 
 /// Classification of a synchronous compositor pipeline build failure.
 ///
@@ -356,14 +356,14 @@ impl Compositor {
 
     /// How far beyond a page cell the effect maps of `f` must be computed to be exact in it.
     pub(crate) fn fx_apron(doc: &Document, f: &plan::FxLayer<'_>) -> i32 {
-        let vector_shape = matches!(f.layer.content, LayerContent::Shape(_)) && photocraft_compose::effect_outline(f.layer).is_none();
+        let stroke_shape = fx::StrokeShape::of(f.layer);
         let progs: Vec<fx::MapProgram> = f
             .layer
             .effects
             .items
             .iter()
             .filter(|e| e.enabled())
-            .map(|e| fx::program_with(e, &doc.global_light, vector_shape, &doc.patterns, (0.0, 0.0)))
+            .map(|e| fx::program_with(e, &doc.global_light, stroke_shape, &doc.patterns, (0.0, 0.0)))
             .collect();
         let want = field_reaches(&progs);
         // Distance fields are exact one pixel inside the window they are computed from.
@@ -394,7 +394,7 @@ impl Compositor {
                 if noisy {
                     return Err(Unsupported(format!("effect noise on `{}` uses the CPU path", f.layer.name)));
                 }
-                for s in fx::program_with(e, &doc.global_light, false, &doc.patterns, (0.0, 0.0)).stages {
+                for s in fx::program_with(e, &doc.global_light, fx::StrokeShape::Other, &doc.patterns, (0.0, 0.0)).stages {
                     if s.lut.as_ref().is_some_and(|l| l.len() > 4096) {
                         return Err(Unsupported(format!("effect blur on `{}` too wide for the GPU path", f.layer.name)));
                     }

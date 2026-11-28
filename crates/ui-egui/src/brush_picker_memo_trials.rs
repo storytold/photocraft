@@ -1,5 +1,5 @@
-//! The canvas Brush Preset picker runs only what changes: open with nothing changing, the whole picker replays, its
-//! popover and the focused search field included, and none of its components runs; a Size drag runs the head and replays the list on every move; a preset rename or a new preset
+//! The canvas Brush Preset picker runs only what changes: open with nothing changing, the whole picker replays (with the
+//! document area around it), its popover and the focused search field included, and none of its components runs; a Size drag runs the head and replays the list on every move; a preset rename or a new preset
 //! builds the rows once, and the lists settle.
 
 use craft::ui::runtime::measure::{MemoRun, last_frame_derived_builds, last_frame_memo_runs, last_pass_memo_runs, last_pass_runs};
@@ -63,8 +63,10 @@ fn an_idle_open_picker_runs_no_component() {
     assert!(crate::brush_picker::opened_at(h.state()).is_some(), "the picker is open");
     for frame in 0..3 {
         h.run_steps(1);
-        assert!(views(&h, "CanvasProps", MemoRun::Ran).is_empty(), "idle frame {frame} runs no picker");
-        assert!(!views(&h, "CanvasProps", MemoRun::Replayed).is_empty(), "idle frame {frame} replays the picker");
+        // The picker replays in its own view, or whole in the document area's view or the docked tree around it.
+        let holders = ["brush_picker::CanvasProps<", "region_versions::CanvasSlot<", "area::TreeView<"];
+        assert!(holders.iter().all(|props| views(&h, props, MemoRun::Ran).is_empty()), "idle frame {frame} runs no picker");
+        assert!(holders.iter().any(|props| !views(&h, props, MemoRun::Replayed).is_empty()), "idle frame {frame} replays the picker");
         assert_eq!(chrome_runs(&h), 0, "idle frame {frame} runs none of the picker's components: {:?}", last_pass_runs(&h.ctx));
     }
     assert!(h.query_all_by_role(Role::Slider).any(|n| n.accesskit_node().label().is_some_and(|label| label.starts_with("Size"))));

@@ -317,8 +317,6 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
         app.navigator_gpu.remove(&id);
     }
     let size = [doc.size.width, doc.size.height];
-    // A full CPU redraw running in the background: show the blocks it has finished.
-    crate::background_redraw::poll(app, &gpu, id);
     let cache = app.canvases.entry((id, GPU_OUTPUT)).or_default();
     let present = cache.on_gpu && gpu.has(id.0, size);
     let current = cache.revision == revision && cache.preview_key == preview_key;

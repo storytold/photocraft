@@ -87,7 +87,6 @@ impl PhotocraftApp {
         if let Some(r) = preset_files_ui::open(self, name, bytes) {
             return r.map(|()| Vec::new());
         }
-        let name = &self.open_name(name);
         // Decoded on a worker: a tab with progress appears now, the document when it's ready
         // (warnings are shown then).
         if self.background_jobs {
@@ -122,6 +121,12 @@ impl PhotocraftApp {
             let (doc, warnings) = import(name, bytes, &opts)?;
             (doc, warnings, false)
         };
+        // Decode under the source name; only a successfully opened template becomes untitled.
+        let opened_name = self.open_name(name);
+        if opened_name != name {
+            doc.name = opened_name.clone();
+        }
+        let name = &opened_name;
         // Preferences › Raw Defaults › Resolution, as the engine's open applies it.
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
         // Edit › Color Settings policies apply on open; Ask When Opening holds the file back

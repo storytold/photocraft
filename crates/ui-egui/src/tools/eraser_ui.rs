@@ -7,7 +7,7 @@
 use craft::behavior::IconId;
 use craft::ui::buttons::ToggleButton;
 use craft::ui::choice::{Checkbox, Segmented};
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, bind_tracked};
 use craft::ui::display::Divider;
 use craft::ui::form::Field;
 use craft::ui::pickers::Select;
@@ -148,8 +148,8 @@ pub(crate) fn stored_tolerance(v: f32) -> f32 {
 }
 
 /// A check box named `label` over `value`.
-fn check(ui: &mut egui::Ui, label: &str, value: &mut bool, tip: Option<&str>) {
-    let mut checkbox = Checkbox::new(Bind::bound(value)).label(label.to_owned());
+fn check(ui: &mut egui::Ui, label: &str, value: Bind<'_, bool>, tip: Option<&str>) {
+    let mut checkbox = Checkbox::new(value).label(label.to_owned());
     if let Some(tip) = tip {
         checkbox = checkbox.tooltip(tip.to_owned());
     }
@@ -168,28 +168,27 @@ pub fn options_bar(ui: &mut egui::Ui, app: &mut PhotocraftApp, tool: Tool) -> bo
 }
 
 fn magic_eraser_members(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
-    let o = &mut app.ui.tool_options;
     // The field clamps without an alert, as the reference's Magic Eraser Tolerance does.
-    let _ = option_cells::number(tl!("Tolerance:"), &mut o.tolerance, 0.0..=255.0).show(ui);
-    check(ui, tl!("Anti-alias"), &mut o.anti_alias, None);
-    check(ui, tl!("Contiguous"), &mut o.contiguous, None);
-    check(ui, tl!("Sample All Layers"), &mut o.sample_all.magic_eraser, None);
+    let _ = option_cells::number(tl!("Tolerance:"), bind_tracked!(app.ui.tool_options => tolerance), 0.0..=255.0).show(ui);
+    let (anti_alias, contiguous, sample_all) = bind_tracked!(app.ui.tool_options => anti_alias, contiguous, sample_all.magic_eraser);
+    check(ui, tl!("Anti-alias"), anti_alias, None);
+    check(ui, tl!("Contiguous"), contiguous, None);
+    check(ui, tl!("Sample All Layers"), sample_all, None);
     Divider::vertical().show(ui);
-    let _ = option_cells::number(tl!("Opacity:"), &mut o.magic_eraser_opacity, 1.0..=100.0).unit("%").show(ui);
+    let _ = option_cells::number(tl!("Opacity:"), bind_tracked!(app.ui.tool_options => magic_eraser_opacity), 1.0..=100.0).unit("%").show(ui);
 }
 
 fn background_eraser_members(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
     let mut alerts = Vec::new();
     {
-        let o = &mut app.ui.tool_options;
         let sampling = [
             Entry::new("continuous".to_string(), tl!("Sampling: Continuous")).icon(IconId::new("eyedropper")),
             Entry::new("once".to_string(), tl!("Sampling: Once")).icon(IconId::new("target")),
             Entry::new("backgroundSwatch".to_string(), tl!("Sampling: Background Swatch")).icon(IconId::new("square")),
         ];
-        let picked = Segmented::new(tl!("Sampling"), Bind::given(o.bg_sampling.clone()), &sampling).show(ui).value().cloned();
+        let picked = Segmented::new(tl!("Sampling"), Bind::given(app.ui.tool_options.bg_sampling.clone()), &sampling).show(ui).value().cloned();
         if let Some(sampling) = picked {
-            o.bg_sampling = sampling;
+            app.ui.tool_options.bg_sampling = sampling;
         }
         Divider::vertical().show(ui);
 
@@ -201,7 +200,7 @@ fn background_eraser_members(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
         // In a `Field`, as Color Replacement's Limits: a bare control's label only names it (#16338).
         let picked = Field::new(tl!("Limits:"))
             .show(ui, |ui, _| {
-                Select::new(tl!("Limits:"), Bind::given(o.bg_limits.clone()), &limits)
+                Select::new(tl!("Limits:"), Bind::given(app.ui.tool_options.bg_limits.clone()), &limits)
                     .tooltip(tl!("How far to let the erasing spread").to_owned())
                     .show(ui)
                     .events
@@ -211,20 +210,20 @@ fn background_eraser_members(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
             .inner
             .flatten();
         if let Some(limits) = picked {
-            o.bg_limits = limits;
+            app.ui.tool_options.bg_limits = limits;
         }
 
         // Shown as the stroke reads it; written back only when the user edits it.
-        let shown = stored_tolerance(o.bg_tolerance);
+        let shown = stored_tolerance(app.ui.tool_options.bg_tolerance);
         let mut tolerance = shown;
-        let alert = option_cells::number(tl!("Tolerance:"), &mut tolerance, 1.0..=100.0)
+        let alert = option_cells::number(tl!("Tolerance:"), Bind::bound(&mut tolerance), 1.0..=100.0)
             .whole()
             .unit("%")
             .tooltip(tl!("Erase range of similar colors"))
             .show(ui)
             .out_of_range;
         if tolerance != shown {
-            o.bg_tolerance = tolerance;
+            app.ui.tool_options.bg_tolerance = tolerance;
         }
         alerts.extend(alert);
     }
@@ -233,7 +232,7 @@ fn background_eraser_members(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
     let before = (*app.session.tools.brush).clone();
     let mut brush = before.clone();
     let mut angle = brush.angle;
-    let angle_out = option_cells::number(tl!("Angle"), &mut angle, -180.0..=180.0)
+    let angle_out = option_cells::number(tl!("Angle"), Bind::bound(&mut angle), -180.0..=180.0)
         .whole()
         .unit("°")
         .icon(IconSpec::svg(IconId::new("rotate_cw")))
@@ -244,7 +243,7 @@ fn background_eraser_members(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
     brush.angle = angle;
     alerts.extend(angle_out.out_of_range);
 
-    check(ui, tl!("Protect Foreground Color"), &mut app.ui.tool_options.bg_protect_fg, Some(tl!("Do not erase the foreground swatch color")));
+    check(ui, tl!("Protect Foreground Color"), bind_tracked!(app.ui.tool_options => bg_protect_fg), Some(tl!("Do not erase the foreground swatch color")));
 
     let pressure = ToggleButton::new(tl!("Always use pressure for size"), Bind::given(brush.pressure_size))
         .icon(IconId::new("target"))

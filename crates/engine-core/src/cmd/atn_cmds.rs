@@ -85,6 +85,8 @@ use events::{EVENTS, event_and_descriptor, event_for};
 use fields::Mapped;
 use files::{load, save};
 pub use menu_item::{MENU_ITEM, menu_item_command, menu_item_commands, menu_item_needs_settings};
+pub(crate) use steps_content_aware::caf_remembered;
+pub use steps_content_aware::{CAF_CUSTOM_AREA_NOT_REMEMBERED, CAF_WORKSPACE_PREFS};
 #[cfg(test)]
 use steps_doc::crop_from;
 pub(crate) use steps_gallery::RECORDED_EVENT;
@@ -196,6 +198,9 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod caf_action_values_tests;
 
 #[cfg(test)]
 mod layer_props_tests;

@@ -258,6 +258,12 @@ pub fn base_rows(app: &PhotocraftApp) -> Vec<Row> {
     if let Some(item) = find(&mut rows, "layer.smartObjects.revealInFinder") {
         item.label = reveal_label().into();
     }
+    // Window › Arrange › New Window names the active document (#16888).
+    if let Some(st) = app.session.active()
+        && let Some(item) = find(&mut rows, "window.arrange.newWindowForDocument")
+    {
+        item.label = format!("New Window for {}", st.doc.name);
+    }
     // File › Open Recent: a dynamic submenu of recently opened files, after Open as Smart Object… (#14053).
     if let Some(after) = rows.iter().position(|i| i.command.id == "file.openAsSmartObject").or_else(|| rows.iter().position(|i| i.command.id == "file.openAs"))
     {
@@ -341,9 +347,15 @@ pub fn base_rows(app: &PhotocraftApp) -> Vec<Row> {
     rows
 }
 
-/// [`base_rows`] with Edit › Menus applied: hidden rows dropped and the chosen colours set.
+/// [`base_rows`] as the menus show them: Layer › New's two Background entries narrowed to the one that applies, then
+/// Edit › Menus applied (hidden rows dropped and the chosen colours set).
 pub fn menu_rows(app: &PhotocraftApp) -> Vec<Row> {
     let mut rows = base_rows(app);
+    // Layer › New lists Layer from Background… while the document has a Background (or none is open) and Background
+    // from Layer while it has none, in the same slot (#16761). The Keyboard Shortcuts dialog keeps both.
+    let background = app.session.active().is_none_or(|st| st.doc.background().is_some());
+    let other = if background { "layer.new.backgroundFromLayer" } else { "layer.new.layerFromBackground" };
+    rows.retain(|r| r.command.id != other);
     let prefs = app.session.prefs();
     let hidden = prefs.menus.hidden.iter().filter(|id| photocraft_engine::prefs::MenuCustomization::hideable(id)).cloned();
     let colors = if prefs.interface.show_menu_colors {
@@ -453,3 +465,7 @@ fn build(app: &PhotocraftApp) -> Built {
     let laid = layout(&bar, target(app.ctx()), &options).bar;
     Built { rows, source: bar, bar: laid }
 }
+
+#[cfg(test)]
+#[path = "background_entry_swap_tests.rs"]
+mod background_entry_swap_tests;

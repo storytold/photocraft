@@ -80,6 +80,9 @@ pub struct PsdExportOptions {
     /// pixel bytes (layers and composite) reach this and spilling is on (`None`: never). The
     /// save then holds the file model's structure, not a second copy of its pixels (#5333).
     pub stage_on_scratch_from: Option<u64>,
+    /// Write the document's ICC profile (resource 1039). Off leaves it out of the file only: the
+    /// document's colours are still read through it (a CMYK document's layers and merged image).
+    pub embed_icc: bool,
 }
 
 impl Default for PsdExportOptions {
@@ -93,6 +96,7 @@ impl Default for PsdExportOptions {
             document_path: None,
             read_linked_files: true,
             stage_on_scratch_from: None,
+            embed_icc: true,
         }
     }
 }

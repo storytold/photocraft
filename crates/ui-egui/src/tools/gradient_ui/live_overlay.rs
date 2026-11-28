@@ -58,7 +58,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut Ui, at: Rect) -> Option<(La
         return None;
     }
     // ⌘ is the Move tool (`hold_keys::cmd_moves`): the overlay steps aside while it is held.
-    if craft::ui::runtime::pointer::frame(ui.ctx()).mods.cmd && crate::canvas::tools::takes_command_stand_in(Tool::Gradient) {
+    if craft::ui::runtime::pointer::mods(ui.ctx()).cmd && crate::canvas::tools::takes_command_stand_in(Tool::Gradient) {
         return None;
     }
     let (layer, frame, canvas) = active_gradient(app)?;

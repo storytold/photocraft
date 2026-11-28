@@ -1,5 +1,5 @@
 //! PhotoCraft's frame floor (frame-design-v2 2.2, 2.3): an idle frame keys the same bytes whatever the size of the
-//! documents, presets and recent files, and builds no derived value; a status message runs only the status bar's view;
+//! documents, presets and recent files, and builds no derived value; a status message runs only the status slot and its body view;
 //! the menu model is built only when a fact it shows changed, never for a tool option or a button release, and the
 //! held model always equals a fresh build.
 
@@ -11,6 +11,7 @@ use photocraft_engine::presets::PresetsExt;
 use serde_json::json;
 
 use crate::PhotocraftApp;
+use crate::chrome_settle_trials::{ShellSlot, slot_runs};
 use crate::state::Tool;
 
 type H = Harness<'static, Box<PhotocraftApp>>;
@@ -80,8 +81,14 @@ fn a_status_message_runs_only_the_status_bar() {
     h.run_steps(2);
     h.state_mut().ui.status = "Saved".into();
     h.run_steps(1);
-    let ran: Vec<&'static str> = last_frame_memo_runs(&h.ctx).into_iter().filter(|(_, _, run)| *run == MemoRun::Ran).map(|(name, _, _)| name).collect();
-    assert!(!ran.is_empty() && ran.iter().all(|name| name.contains("status_bar::StatusProps")), "only the status bar's view runs: {ran:?}");
+    let runs = last_frame_memo_runs(&h.ctx);
+    let ran: Vec<&'static str> = runs.iter().filter(|(_, _, run)| *run == MemoRun::Ran).map(|(name, _, _)| *name).collect();
+    let slots = [ShellSlot::Title, ShellSlot::Options, ShellSlot::Status].map(|slot| slot_runs(&runs, slot).0);
+    assert!(slots[0] == 0 && slots[1] == 0 && slots[2] > 0, "of the shell's slots only the status bar runs: {slots:?}");
+    assert!(
+        ran.iter().all(|name| name.contains("status_bar::StatusProps") || name.contains("app_shell::SlotView<")),
+        "only the status slot and the status bar's body view run: {ran:?}"
+    );
 }
 
 #[test]

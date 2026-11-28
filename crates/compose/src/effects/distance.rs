@@ -325,30 +325,6 @@ fn covered(s: &Map, test: impl Fn(f32) -> bool + Sync) -> Vec<bool> {
 /// Distance from each pixel centre inside the shape to the shape's edge
 /// (≤ 0 outside).
 pub(super) fn dist_inside(s: &Map) -> Vec<f32> {
-    dist_inside_by(s, Metric::Euclidean)
-}
-
-pub(super) fn dist_inside_by(s: &Map, m: Metric) -> Vec<f32> {
-    if m == Metric::Chamfer {
-        // Partly covered edge pixels (alpha below their neighbourhood's) are seeds starting at
-        // their coverage, mirroring `dist_outside`: a 25 % edge column puts the edge 0.25 px in.
-        let cov = local_coverage(s);
-        let start =
-            s.v.iter()
-                .zip(&cov.v)
-                .map(|(&a, &c)| {
-                    if a <= INSIDE_EPS {
-                        0.0
-                    } else if c < 1.0 - INSIDE_EPS {
-                        c
-                    } else {
-                        CHAMFER_INF
-                    }
-                })
-                .collect();
-        let (d, _) = chamfer_from(start, s.w, s.h);
-        return d.iter().zip(&s.v).map(|(d, &a)| if a <= INSIDE_EPS { -0.5 } else { d - 0.5 }).collect();
-    }
     let outside = covered(s, |a| a <= INSIDE_EPS);
     let (d, _) = edt_nearest(&outside, s.w, s.h);
     par_fill(s.w, s.h, 0.0f32, |y, row| {
@@ -357,6 +333,36 @@ pub(super) fn dist_inside_by(s: &Map, m: Metric) -> Vec<f32> {
             *out = if outside[i] { -0.5 } else { d[i] - 0.5 };
         }
     })
+}
+
+/// Chamfer distance for Inside and Center strokes.
+pub(super) fn stroke_inside_distance(s: &Map, raster: bool) -> Vec<f32> {
+    // Partly covered edge pixels start at their local coverage. Keep these sub-pixel
+    // distances for the antialiased outline.
+    let mut seeds = local_coverage(s).v;
+    for (seed, &alpha) in seeds.iter_mut().zip(&s.v) {
+        *seed = if alpha <= INSIDE_EPS {
+            0.0
+        } else if *seed < 1.0 - INSIDE_EPS {
+            *seed
+        } else {
+            CHAMFER_INF
+        };
+    }
+    let (mut distances, _) = chamfer_from(seeds, s.w, s.h);
+    for (distance, &alpha) in distances.iter_mut().zip(&s.v) {
+        let d = *distance;
+        *distance = if alpha <= INSIDE_EPS {
+            -0.5
+        } else if raster && alpha < 1.0 && d > 1.0 {
+            // Translucent raster interiors also take the stroke. Apply the distance
+            // locally, so it cannot move the stroke boundary in nearby opaque pixels.
+            0.0
+        } else {
+            d - 0.5
+        };
+    }
+    distances
 }
 
 /// Alpha relative to the 3×3 neighbourhood maximum: separates edge coverage
@@ -770,6 +776,8 @@ pub enum FieldKind {
     ChokeInside,
     /// Stroke distance inside the shape.
     StrokeInside,
+    /// Inside stroke distance with translucent raster pixels covered.
+    StrokeInsideRaster,
     /// Exact Euclidean distance outside the shape: a wide raster stroke's outer edge (see
     /// [`stroke_outside_exact`]). The chamfer's level sets are polygons (an ~8-fold octagon), so a
     /// wide stroke's outer boundary facets; the shadow / glow spread above keeps the chamfer (#3646).
@@ -792,7 +800,8 @@ pub fn distance_field(kind: FieldKind, alpha: Vec<f32>, w: usize, h: usize, reac
         FieldKind::BevelInside => bevel_dist_inside(&s, &sharp_edges(&s), reach),
         FieldKind::StrokeOutside => dist_outside_by(&s, Metric::Chamfer),
         FieldKind::ChokeInside => dist_outside_by(&s.map(|a| 1.0 - a), Metric::Chamfer),
-        FieldKind::StrokeInside => dist_inside_by(&s, Metric::Chamfer),
+        FieldKind::StrokeInside => stroke_inside_distance(&s, false),
+        FieldKind::StrokeInsideRaster => stroke_inside_distance(&s, true),
         FieldKind::StrokeOutsideExact => dist_outside_by(&s, Metric::Euclidean),
         FieldKind::StrokeOutsideVector => dist_outside_by(&local_coverage(&s), Metric::Euclidean),
         FieldKind::StrokeOutsideVectorChamfer => dist_outside_by(&local_coverage(&s), Metric::Chamfer),
