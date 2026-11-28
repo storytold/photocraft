@@ -95,7 +95,10 @@ fn warnings(image: &craft_raw::RawImage) -> Vec<String> {
         if image.level_sources.black == craft_raw::LevelSource::Fallback {
             out.push("raw black level not recorded in a documented tag; assumed default".into());
         }
-        if image.level_sources.white == craft_raw::LevelSource::Fallback {
+        // Panasonic RW2 files have no usable linearity-limit tag; craft-raw derives
+        // white from a clipped highlight plateau and falls back to the full bit-depth
+        // range by design when nothing clipped, so that fallback is expected.
+        if image.format != craft_raw::RawFormat::Rw2 && image.level_sources.white == craft_raw::LevelSource::Fallback {
             out.push("raw white level not recorded in a documented tag; assumed full sample range".into());
         }
     }
@@ -228,6 +231,13 @@ mod tests {
         let notices = warnings(&image);
         assert!(notices.iter().any(|warning| warning.contains("black level")));
         assert!(notices.iter().any(|warning| warning.contains("white level")));
+        image.format = craft_raw::RawFormat::Rw2;
+        let rw2_notices = warnings(&image);
+        assert!(rw2_notices.iter().any(|warning| warning.contains("black level")));
+        assert!(
+            rw2_notices.iter().all(|warning| !warning.contains("white level")),
+            "RW2 full-range white fallback is expected when nothing clipped: {rw2_notices:?}"
+        );
         image.format = craft_raw::RawFormat::Dng;
         assert!(warnings(&image).iter().all(|warning| !warning.contains("level")), "DNG's documented defaults are not missing camera metadata");
     }

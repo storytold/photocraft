@@ -198,12 +198,26 @@ fn rw2_format4_round_trip_is_exact() {
     assert_eq!(s.white, [4095.0; 3]);
     assert_eq!(s.camera_wb, Some([2.0, 1.0, 1.5]));
     assert_eq!(s.crop, Rect::new(2, 2, w - 4, h - 4));
-    // The decoded white is the full-range fallback. Keep every other decoder
-    // disclosure unexpected while preserving exact samples, CFA, levels and crop.
-    assert_eq!(s.warnings.len(), 1, "{:?}", s.warnings);
-    assert!(s.warnings[0].contains("white level") && s.warnings[0].contains("full sample range"), "{:?}", s.warnings);
+    // RW2 full-range white fallback when nothing clipped is expected by design
+    // and must not produce a user warning.
+    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
     let d = develop_sensor(&s, &DevelopOptions::default()).unwrap();
     assert_eq!((d.width as usize, d.height as usize), (w - 4, h - 4));
+}
+
+#[test]
+fn rw2_unclipped_full_range_white_emits_no_warning() {
+    let (w5, h5) = (40, 24);
+    let unclipped5: Vec<u16> = (0..w5 * h5).map(|i| 200 + ((i * 17) % 2400) as u16).collect();
+    let s5 = decode(&rw2(w5, h5, &unclipped5, 12), &Limits::default()).unwrap();
+    assert_eq!(s5.white, [4095.0; 3]);
+    assert!(s5.warnings.is_empty(), "RawFormat 5 unclipped RW2 should not warn: {:?}", s5.warnings);
+
+    let (w4, h4) = (42, 6);
+    let unclipped4: Vec<u16> = (0..w4 * h4).map(|i| 200 + ((i * 7) % 1800) as u16).collect();
+    let s4 = decode(&rw2_format4(w4, h4, &unclipped4), &Limits::default()).unwrap();
+    assert_eq!(s4.white, [4095.0; 3]);
+    assert!(s4.warnings.is_empty(), "RawFormat 4 unclipped RW2 should not warn: {:?}", s4.warnings);
 }
 
 #[test]
