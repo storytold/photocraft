@@ -31,6 +31,28 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
     if !has_brush_picker(tool) || app.ui.brush_tool == tool {
         return;
     }
+    swap_tool_brush(app, tool);
+}
+
+/// Runs `f` with `tool`'s own brush live, then puts the outgoing tool's brush back: a command that
+/// paints with a tool other than the active one (Stroke Path's Tool:) must use that tool's settings,
+/// not those of the last brush tool picked (#16182). The picked preset belongs to the outgoing tool,
+/// so it comes back too.
+pub(crate) fn with_tool_brush<R>(app: &mut PhotocraftApp, tool: Tool, f: impl FnOnce(&mut PhotocraftApp) -> R) -> R {
+    let outgoing = app.ui.brush_tool;
+    if outgoing == tool || !has_brush_picker(tool) {
+        return f(app);
+    }
+    let preset = app.session.tools.current_preset.clone();
+    swap_tool_brush(app, tool);
+    let out = f(app);
+    swap_tool_brush(app, outgoing);
+    app.session.tools.current_preset = preset;
+    app.session.tools.brush_changed();
+    out
+}
+
+fn swap_tool_brush(app: &mut PhotocraftApp, tool: Tool) {
     // The live brush is the outgoing tool's, so save it there before the new one takes over: any
     // edit it made since it was last active is in it, so its copy never goes stale.
     let current = (*app.session.tools.brush).clone();

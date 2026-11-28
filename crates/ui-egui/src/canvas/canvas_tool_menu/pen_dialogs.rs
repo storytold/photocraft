@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use super::pen_pending;
 use crate::PhotocraftApp;
+use crate::state::Tool;
 
 /// The commands this family's dialogs run.
 const COMMANDS: [&str; 7] =
@@ -36,6 +37,31 @@ const STROKE_TOOLS: [(&str, &str); 17] = [
     ("colorReplacement", "Color Replacement"),
     ("mixerBrush", "Mixer Brush"),
 ];
+
+/// Runs `path.stroke` with the chosen tool's own brush, whichever tool is active (#16182).
+pub(crate) fn stroke_path(app: &mut PhotocraftApp, params: Value) -> Result<Value, String> {
+    let tool = match params.get("tool").and_then(Value::as_str).unwrap_or("brush") {
+        "brush" => Tool::Brush,
+        "pencil" => Tool::Pencil,
+        "eraser" => Tool::Eraser,
+        "backgroundEraser" => Tool::BackgroundEraser,
+        "cloneStamp" => Tool::CloneStamp,
+        "patternStamp" => Tool::PatternStamp,
+        "healingBrush" => Tool::Healing,
+        "spotHealingBrush" => Tool::SpotHealing,
+        "historyBrush" => Tool::HistoryBrush,
+        "blur" => Tool::Blur,
+        "sharpen" => Tool::Sharpen,
+        "smudge" => Tool::Smudge,
+        "dodge" => Tool::Dodge,
+        "burn" => Tool::Burn,
+        "sponge" => Tool::Sponge,
+        "colorReplacement" => Tool::ColorReplacement,
+        "mixerBrush" => Tool::MixerBrush,
+        _ => return app.run("path.stroke", params),
+    };
+    crate::paint_mouse::with_tool_brush(app, tool, |app| app.run("path.stroke", params))
+}
 
 /// The Make Selection operations, in Photoshop's order: (`path.toSelection` mode, label).
 const MAKE_SELECTION_OPERATIONS: [(&str, &str); 4] =
@@ -179,7 +205,8 @@ pub(crate) fn run(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamRes
 pub(crate) fn check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
     let Some(params) = command_params(app, result) else { return Ok(()) };
     let revision = app.session.active().map(|st| st.revision);
-    app.run(result.key.as_str(), params.clone()).map_err(Label::from)?;
+    let ran = if result.key == "path.stroke" { stroke_path(app, params.clone()) } else { app.run(result.key.as_str(), params.clone()) };
+    ran.map_err(Label::from)?;
     if result.key == "path.toSelection" {
         name_make_selection_step(app, &params, revision);
     }
