@@ -94,6 +94,7 @@ impl PhotocraftApp {
             live_adjust: None,
             frame: 0,
             notices_live: notices::Live::default(),
+            panel_recovery: None,
             low_memory: crate::memory_warning::Watch::default(),
             last_canvas_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             last_canvas_layer: egui::LayerId::background(),

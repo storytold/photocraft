@@ -83,13 +83,13 @@ fn reset_workspace_restores_the_default_layout_and_new_workspaces_keep_theirs() 
     assert_eq!(app.workspaces.set.current, named);
 }
 
-/// The load robustness of PhotoCraft's own payload: an unreadable `docking` value is dropped for the
-/// default layout, and the rest of the save still applies.
+/// An unreadable `docking` value shows the default without losing the original save.
 #[test]
-fn an_unreadable_docking_layout_is_dropped_and_the_rest_applies() {
+fn an_unreadable_docking_layout_is_retained_until_a_panel_changes() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let mut saved = snapshot(&app);
     saved["docking"] = json!({"layout": "not-a-dock-layout"});
+    saved["dockingHidden"] = json!(["future panel metadata"]);
     saved["panels"]["status_bar"] = json!(false);
     app.run("window.panel.close", json!({"panel": "layers"})).unwrap();
     let default = registry::default_workspace();
@@ -97,9 +97,101 @@ fn an_unreadable_docking_layout_is_dropped_and_the_rest_applies() {
     assert!(app.ui.panels.status_bar);
 
     apply(&mut app, &saved);
-    assert_eq!(app.ui.docking.layout(), default.layout(), "the unreadable docking value is dropped for the default");
+    assert_eq!(app.ui.docking.layout(), default.layout(), "the default layout shows");
     assert_eq!(app.ui.docking.hidden(), default.hidden());
     assert!(!app.ui.panels.status_bar, "the rest of the save still applies");
+    assert_eq!(snapshot(&app), saved, "the fallback keeps the original layout and its companion data");
+    assert!(crate::notices::shown_titled(&app, RECOVERY_TITLE));
+
+    assert!(crate::panel_docking::show_panel(&mut app, "layers", Some(true)).unwrap());
+    assert_eq!(snapshot(&app), saved, "showing the already visible panel keeps the saved layout");
+
+    app.run("window.panel.close", json!({"panel": "layers"})).unwrap();
+    assert_eq!(snapshot(&app)["docking"]["version"], json!(Workspace::<String>::VERSION));
+    assert!(!crate::notices::shown_titled(&app, RECOVERY_TITLE));
+}
+
+#[test]
+fn choosing_or_resetting_to_the_same_arrangement_replaces_the_unreadable_layout() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.session.prefs.edit(|p| p.workspace.remember_workspace_changes = true);
+    let default = snapshot(&app);
+    let named = crate::workspace_ui::save(&mut app, "Same arrangement").unwrap();
+    let mut saved = default.clone();
+    saved["docking"] = json!({"version": 99, "fromFuture": [1, 2, 3]});
+    app.session.prefs.edit(|p| p.panel_layout = saved.clone());
+    restore(&mut app);
+    crate::workspace_ui::select(&mut app, &named).unwrap();
+    assert_eq!(snapshot(&app), saved, "reselecting the same workspace without a layout change keeps the original");
+
+    for command in ["window.workspace.essentials", "workspace.reset"] {
+        app.session.prefs.edit(|p| p.panel_layout = saved.clone());
+        restore(&mut app);
+        assert_eq!(snapshot(&app), saved);
+        assert!(crate::workspace_ui::select(&mut app, "missing-workspace").is_err());
+        assert_eq!(snapshot(&app), saved);
+
+        crate::menus::invoke(&mut app, &ctx, command, json!({})).unwrap();
+        assert_eq!(app.session.prefs().panel_layout, default);
+        assert!(!crate::notices::shown_titled(&app, RECOVERY_TITLE));
+    }
+}
+
+#[test]
+fn an_overflowing_floating_rect_falls_back_and_keeps_the_saved_value() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("window.panel.float", json!({"panel": "layers"})).unwrap();
+    let mut saved = snapshot(&app);
+    let floated = saved["docking"]["layout"]["floating"].as_array_mut().unwrap();
+    assert!(!floated.is_empty());
+    floated[0]["rect"][0] = json!(1e300);
+
+    apply(&mut app, &saved);
+    assert_eq!(app.ui.docking.layout(), registry::default_workspace().layout());
+    assert_eq!(snapshot(&app), saved);
+}
+
+#[test]
+fn recovery_notice_survives_full_screen_and_a_full_queue_of_sticky_notices() {
+    use crate::{Services, i18n, notices};
+    use craft::ui::runtime::{env::WindowKey, toast};
+    use egui_kittest::Harness;
+
+    let mut harness = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::AppTheme::pro());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Services::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.session.prefs.edit(|p| {
+            p.interface.language = "en".into();
+            p.interface.notification_auto_hide = false;
+        });
+        let mut saved = snapshot(&app);
+        saved["docking"] = json!({"layout": "unreadable"});
+        saved["panels"]["status_bar"] = json!(false);
+        apply(&mut app, &saved);
+        app.ui.view.screen_mode = craft::ui::shell::ScreenMode::FullScreen;
+        app
+    });
+    let has_card = |ctx: &egui::Context, title: &str| {
+        toast::cards(ctx, &WindowKey::main()).iter().any(|card| card.toast.title.as_ref().is_some_and(|label| label.as_str() == title))
+    };
+    harness.run_steps(3);
+    assert!(has_card(&harness.ctx, RECOVERY_TITLE));
+
+    for id in 0..toast::MAX_CARDS {
+        notices::post(harness.state_mut(), format!("Notice {id}"), Vec::new(), notices::Tone::Neutral, None);
+    }
+    harness.run_steps(4);
+    assert!(has_card(&harness.ctx, RECOVERY_TITLE));
+    assert!(has_card(&harness.ctx, &format!("Notice {}", toast::MAX_CARDS - 1)));
+
+    if let Some(lang) = i18n::Lang::from_code("ru") {
+        let title = i18n::with_language(lang, || i18n::t(RECOVERY_TITLE).to_string());
+        harness.state_mut().session.prefs.edit(|p| p.interface.language = "ru".into());
+        harness.run_steps(4);
+        assert!(has_card(&harness.ctx, &title));
+    }
 }
 
 /// Whether the toolbar's column is in the end dock.

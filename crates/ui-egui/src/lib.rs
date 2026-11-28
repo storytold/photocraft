@@ -413,6 +413,7 @@ pub struct PhotocraftApp {
     /// What the notice stack keeps between frames: the pointer rest that gives a fresh auto-hide
     /// delay in the frame the pointer leaves (`notices::show`).
     pub(crate) notices_live: notices::Live,
+    pub(crate) panel_recovery: Option<dock::Recovery>,
     /// The low-memory warning's schedule and state (`memory_warning`).
     pub(crate) low_memory: memory_warning::Watch,
     /// Screen rect of the main canvas last frame (for overlays and the navigator).

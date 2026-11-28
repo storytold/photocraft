@@ -135,13 +135,10 @@ fn migrate(app: &mut PhotocraftApp, prefs: &Preferences, set: &mut WorkspaceSet<
     }
     let mut extras = std::collections::BTreeMap::new();
     for (name, entry) in &prefs.workspaces {
-        // The old entry's layout loads through the dock's own one-time move, into the live workspace and out again.
-        let live = app.ui.docking.clone();
-        panel_docking::load(app, entry);
-        let layout = std::mem::replace(&mut app.ui.docking, live);
+        let (layout, _) = panel_docking::loaded(entry);
         let has = |key: &str| entry.get(key).is_some();
         let keeps = WorkspaceKeeps::new(has("shortcuts"), has("menus"), has("toolbar"));
-        let Ok(id) = set.save(name, std::sync::Arc::unwrap_or_clone(layout), WorkspaceChrome::default(), keeps) else { continue };
+        let Ok(id) = set.save(name, layout, WorkspaceChrome::default(), keeps) else { continue };
         let captured: Map<String, Value> = EXTRAS.iter().filter_map(|key| entry.get(*key).map(|value| ((*key).to_owned(), value.clone()))).collect();
         if !captured.is_empty() {
             extras.insert(id, Value::Object(captured));
@@ -204,7 +201,11 @@ fn restore_extras(app: &mut PhotocraftApp, id: &str) {
 /// Makes workspace `id` current: its layout replaces the live one, its captured extras are restored, the dock's
 /// layout is remembered. The host's chrome flags (menu bar, rail) stay as the host has them.
 pub fn select(app: &mut PhotocraftApp, id: &str) -> Result<(), String> {
+    let switched = app.workspaces.set.current != id;
     app.workspaces.set.select(id, std::sync::Arc::make_mut(&mut app.ui.docking)).map_err(refused)?;
+    if switched {
+        crate::dock::finish_recovery(app);
+    }
     restore_extras(app, id);
     crate::dock::persist(app);
     store(app);
@@ -256,7 +257,14 @@ fn delete_id(app: &mut PhotocraftApp, id: &str) -> Result<(), String> {
 
 /// Runs a workspace command. New and Delete without a name open their hosted dialog and return its id.
 pub fn run(app: &mut PhotocraftApp, _ctx: &egui::Context, command: WorkspaceCommands) -> Result<Value, String> {
-    let ask = run_workspace(&mut app.workspaces.set, std::sync::Arc::make_mut(&mut app.ui.docking), command);
+    let ask = if command == WorkspaceCommands::Reset {
+        app.workspaces.set.reset(std::sync::Arc::make_mut(&mut app.ui.docking)).map_err(refused)?;
+        crate::dock::finish_recovery(app);
+        crate::dock::persist(app);
+        None
+    } else {
+        run_workspace(&mut app.workspaces.set, std::sync::Arc::make_mut(&mut app.ui.docking), command)
+    };
     match ask {
         Some(WorkspaceAsk::Name) => {
             let dialog = HostedNewWorkspace::new(&app.workspaces.set).offered(WorkspaceKeeps::new(true, true, true));
@@ -268,9 +276,6 @@ pub fn run(app: &mut PhotocraftApp, _ctx: &egui::Context, command: WorkspaceComm
             return Ok(json!({"dialog": id.value().to_string()}));
         }
         Some(_) | None => {}
-    }
-    if command == WorkspaceCommands::Reset {
-        crate::dock::persist(app);
     }
     store(app);
     Ok(if command == WorkspaceCommands::Lock { json!({"locked": app.workspaces.set.locked}) } else { json!({"workspace": app.workspaces.set.current}) })

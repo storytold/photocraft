@@ -119,10 +119,10 @@ fn a_saved_toolbar_below_the_canvas_loads_in_a_dock_column() {
     let below = Action::move_column(TOOLBAR.to_owned(), Target::at(CANVAS.to_owned(), DockPlacement::Split(DockSide::Bottom)));
     std::sync::Arc::make_mut(&mut old.ui.docking).apply(below, false, |_: &String| Permissions::ALL).unwrap();
     assert!(matches!(toolbar_place(&old), Some(PanelPlace::Node(_))));
-    let saved = crate::panel_docking::snapshot(&old);
+    let saved = crate::dock::snapshot(&old);
 
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    crate::panel_docking::load(&mut app, &saved);
+    crate::dock::apply(&mut app, &saved);
     assert!(matches!(toolbar_place(&app), Some(PanelPlace::Dock { .. })), "{:?}", toolbar_place(&app));
     assert!(app.ui.docking.layout().contains(&CANVAS.to_owned()));
 }

@@ -764,52 +764,39 @@ fn newer(docking: &Value) -> bool {
     docking.get("version").and_then(Value::as_u64).is_some_and(|version| version > u64::from(Workspace::VERSION))
 }
 
-/// Loads the workspace of a saved layout (`prefs.panelLayout` or a saved workspace) into `app.ui.docking`.
-///
-/// A readable `docking` workspace is fitted to the registry. One from a newer version, or one that does not read,
-/// shows the default; [`snapshot`] writes a newer one back unchanged until the arrangement changes. A save from
-/// before the workspace (`panels`, `dockTabs`, `dock`, `timelineOpen`) migrates once onto the default.
-pub(crate) fn load(app: &mut PhotocraftApp, saved: &Value) {
-    Arc::make_mut(&mut app.ui.docking).replace(loaded(saved));
-}
-
-/// [`load`] at launch: Brush Settings is a transient window, so a remembered workspace that holds it loads with it
+/// At launch Brush Settings is a transient window, so a remembered workspace that holds it loads with it
 /// closed (its place kept for when it opens). A workspace switch loads it as saved.
-pub(crate) fn load_at_launch(app: &mut PhotocraftApp, saved: &Value) {
-    let mut workspace = loaded(saved);
+pub(crate) fn close_transient_on_launch(app: &mut PhotocraftApp, workspace: &mut Workspace) {
     let transient = "brushSettings".to_owned();
     if workspace.layout().contains(&transient)
         && let Err(error) = workspace.apply(Action::close(transient), false, |panel: &String| permissions(panel))
     {
         app.ui.status = error.to_string();
     }
-    Arc::make_mut(&mut app.ui.docking).replace(workspace);
 }
 
-/// The workspace of a saved layout, fitted to the registry. A save that predates the toolbar panel brings the toolbar's
-/// old chrome flags over once ([`migrate_toolbar`]).
-fn loaded(saved: &Value) -> Workspace {
+/// The workspace fitted to the registry and whether its saved value needs to be kept for recovery.
+/// Older saves still migrate their dock and toolbar flags when they do not contain a workspace.
+pub(crate) fn loaded(saved: &Value) -> (Workspace, bool) {
     let default = registry::default_workspace();
     let toolbar = TOOLBAR.to_owned();
-    let mut predates_toolbar = false;
-    let mut workspace = match saved.get("docking") {
-        Some(docking) if docking.is_object() => match serde_json::from_value::<Workspace>(docking.clone()) {
-            Ok(workspace) if workspace.validate().is_ok() => {
-                predates_toolbar = !workspace.layout().contains(&toolbar) && !workspace.hidden().iter().any(|(panel, _)| *panel == toolbar);
-                workspace
+    let (mut workspace, predates_toolbar) = match saved.get("docking") {
+        Some(docking) if !docking.is_null() => match serde_json::from_value::<Workspace>(docking.clone()) {
+            Ok(workspace) if !newer(docking) && workspace.validate().is_ok() => {
+                let predates_toolbar = !workspace.layout().contains(&toolbar) && !workspace.hidden().iter().any(|(panel, _)| *panel == toolbar);
+                (workspace, predates_toolbar)
             }
-            _ => default.clone(),
+            // The unversioned bare Layout predates Workspace. It has no Workspace envelope to preserve.
+            _ if docking.get("version").is_none() && docking.get("layout").is_none() && docking.get("root").is_some() => return (default, false),
+            _ => return (default, true),
         },
-        _ => {
-            predates_toolbar = true;
-            migrated(saved, &default)
-        }
+        _ => (migrated(saved, &default), true),
     };
     workspace.reconcile(|panel: &String| registry::registered(panel), |panel: &String| permissions(panel), &default);
     if predates_toolbar {
         migrate_toolbar(&mut workspace, saved.get("panels"));
     }
-    workspace
+    (workspace, false)
 }
 
 /// The first panel of the end dock's outermost column other than `skip`: the anchor a column moves before to take the
@@ -887,17 +874,6 @@ fn migrated(saved: &Value, default: &Workspace) -> Workspace {
         Ok(_) => workspace,
         Err(_) => default.clone(),
     }
-}
-
-/// What a saved layout holds: the chrome flags and the workspace. A newer saved workspace that shows as the default
-/// is written back as it was saved, so this version never overwrites it until the user changes the arrangement.
-pub(crate) fn snapshot(app: &PhotocraftApp) -> Value {
-    let kept = app.session.prefs().panel_layout.get("docking").filter(|docking| newer(docking)).cloned();
-    let docking = match kept {
-        Some(kept) if *app.ui.docking == registry::default_workspace() => kept,
-        _ => json!(app.ui.docking),
-    };
-    json!({"panels": app.ui.panels, "docking": docking})
 }
 
 // ---------------------------------------------------------------------------------------------------------------
