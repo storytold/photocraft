@@ -890,6 +890,9 @@ fn selection_outcomes_restore_hidden_extras() {
     };
     let white_selected: Setup = |app| {
         app.run("edit.fill", json!({"color": "#ffffff"})).unwrap();
+        // A uniform Background click now selects the whole canvas (#12863), so this "finds
+        // nothing" fixture needs an object on the layer: the click at 3,3 stays off it.
+        app.run("paint.pencil", json!({"points": [[80, 60]], "size": 6, "color": "#000000"})).unwrap();
         app.run("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
     };
     let object_scene: Setup = |app| {
